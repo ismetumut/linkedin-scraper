@@ -17,6 +17,19 @@ const RATE_LIMIT = {
   requests: new Map<string, number[]>(),
 }
 
+export async function GET() {
+  return NextResponse.json({
+    status: "LinkedIn Direct Scraper API",
+    version: "1.0.0",
+    mode: "PRODUCTION",
+    endpoints: {
+      "POST /api/linkedin-direct": "Scrape LinkedIn connections directly",
+    },
+    warning: "⚠️ This scraping method may violate LinkedIn's Terms of Service",
+    recommendation: "Use LinkedIn's official data export for production use",
+  })
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
