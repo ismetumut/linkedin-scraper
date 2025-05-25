@@ -15,10 +15,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing cookies" }, { status: 400 })
     }
 
+    // Çerez formatını kontrol et ve düzelt
+    let formattedCookies = cookies
+    // Eğer çerezler zaten bir string değilse veya "name=value;" formatında değilse düzelt
+    if (typeof cookies === "object") {
+      // Obje ise string'e çevir
+      formattedCookies = Object.entries(cookies)
+        .map(([name, value]) => `${name}=${value}`)
+        .join("; ")
+    } else if (!cookies.includes("=")) {
+      return NextResponse.json({ error: "Invalid cookie format" }, { status: 400 })
+    }
+
     // Varsayılan olarak kendi bağlantılarınızı çekin, aksi takdirde belirtilen profil URL'sini kullanın
     const url = profileUrl || "https://www.linkedin.com/mynetwork/invite-connect/connections/"
 
     console.log(`Fetching LinkedIn connections from: ${url}`)
+    console.log(`Using cookies format: ${formattedCookies.substring(0, 20)}...`)
 
     // ScrapingBee ile isteği yap
     const apiUrl = `https://app.scrapingbee.com/api/v1/`
@@ -26,7 +39,7 @@ export async function POST(req: NextRequest) {
       api_key: SCRAPINGBEE_API_KEY,
       url,
       render_js: "false",
-      cookies, // String olarak: "li_at=xxx; JSESSIONID=xxx;"
+      cookies: formattedCookies, // Düzeltilmiş çerez formatı
       premium_proxy: "true", // LinkedIn için önerilir
       country_code: "us",
     }).toString()

@@ -48,11 +48,8 @@ export async function POST(req: NextRequest) {
     const setCookieHeader = loginPageRes.headers.get("set-cookie")
     let initialCookies = ""
     if (setCookieHeader) {
-      // Çerezleri ayrıştır
-      initialCookies = setCookieHeader
-        .split(",")
-        .map((cookie) => cookie.split(";")[0].trim())
-        .join("; ")
+      // Çerezleri ayrıştır ve doğru formatta birleştir
+      initialCookies = parseCookieHeader(setCookieHeader)
     }
 
     // 2. Giriş yap
@@ -93,12 +90,8 @@ export async function POST(req: NextRequest) {
     const loginCookieHeader = loginRes.headers.get("set-cookie")
     let cookies = initialCookies
     if (loginCookieHeader) {
-      const newCookies = loginCookieHeader
-        .split(",")
-        .map((cookie) => cookie.split(";")[0].trim())
-        .join("; ")
-
-      cookies = cookies ? `${cookies}; ${newCookies}` : newCookies
+      const newCookies = parseCookieHeader(loginCookieHeader)
+      cookies = cookies ? mergeCookieStrings(cookies, newCookies) : newCookies
     }
 
     // Önemli çerezleri kontrol et
@@ -161,4 +154,49 @@ export async function POST(req: NextRequest) {
       { status: 500 },
     )
   }
+}
+
+// Set-Cookie header'ını ayrıştırıp name=value; formatında string döndürür
+function parseCookieHeader(setCookieHeader: string): string {
+  const cookiePairs: string[] = []
+
+  // Set-Cookie header'ı virgülle ayrılmış olabilir
+  setCookieHeader.split(/,(?=[^ =;]+=[^;]+)/).forEach((cookieString) => {
+    // Her bir çerez string'ini ayrıştır
+    const cookieParts = cookieString.split(";")[0].trim()
+    const equalIndex = cookieParts.indexOf("=")
+
+    if (equalIndex > 0) {
+      const name = cookieParts.substring(0, equalIndex).trim()
+      const value = cookieParts.substring(equalIndex + 1).trim()
+
+      if (name && value) {
+        cookiePairs.push(`${name}=${value}`)
+      }
+    }
+  })
+
+  return cookiePairs.join("; ")
+}
+
+// İki çerez string'ini birleştirir, aynı isimli çerezlerde ikinci string'deki değer kullanılır
+function mergeCookieStrings(cookies1: string, cookies2: string): string {
+  const cookieMap = new Map<string, string>()
+
+  // İlk çerez string'ini ayrıştır
+  cookies1.split("; ").forEach((cookie) => {
+    const [name, value] = cookie.split("=")
+    if (name && value) cookieMap.set(name, value)
+  })
+
+  // İkinci çerez string'ini ayrıştır ve varsa üzerine yaz
+  cookies2.split("; ").forEach((cookie) => {
+    const [name, value] = cookie.split("=")
+    if (name && value) cookieMap.set(name, value)
+  })
+
+  // Birleştirilmiş çerez string'ini oluştur
+  return Array.from(cookieMap.entries())
+    .map(([name, value]) => `${name}=${value}`)
+    .join("; ")
 }
