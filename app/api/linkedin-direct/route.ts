@@ -56,18 +56,32 @@ export async function POST(request: NextRequest) {
 
     console.log(`LinkedIn scraping başlatılıyor: ${email}, derece: ${degree}`)
 
-    // LinkedIn'e giriş yap ve bağlantıları çek
-    const connections = await scrapeLinkedInConnections(email, password, degree, connectionId)
+    try {
+      // LinkedIn'e giriş yap ve bağlantıları çek
+      const connections = await scrapeLinkedInConnections(email, password, degree, connectionId)
 
-    return NextResponse.json({
-      success: true,
-      connections,
-      timestamp: new Date().toISOString(),
-      degree,
-      connectionName: connectionName || null,
-    })
+      return NextResponse.json({
+        success: true,
+        connections,
+        timestamp: new Date().toISOString(),
+        degree,
+        connectionName: connectionName || null,
+      })
+    } catch (error) {
+      console.error("LinkedIn scraping hatası:", error.message)
+
+      // LinkedIn'in CSV export özelliğini kullanmayı öneren mock veri döndür
+      return NextResponse.json({
+        error: error.message || "LinkedIn bağlantıları çekilemedi",
+        suggestion: "LinkedIn'in CSV export özelliğini kullanmanızı öneririz",
+        timestamp: new Date().toISOString(),
+        success: false,
+        mockData: true,
+        connections: generateMockConnections(15),
+      })
+    }
   } catch (error) {
-    console.error("LinkedIn scraping hatası:", error)
+    console.error("API hatası:", error)
 
     return NextResponse.json(
       {
@@ -164,73 +178,162 @@ async function scrapeLinkedInConnections(
         csrfToken: csrfToken,
         loginCsrfParam: csrfToken,
       }).toString(),
-      redirect: "manual",
+      redirect: "follow", // Yönlendirmeleri otomatik takip et
     })
 
-    // Yönlendirme çerezlerini al
-    const redirectCookies = parseCookies(loginResponse.headers.get("set-cookie") || "")
-    const allCookies = { ...cookies, ...redirectCookies }
+    console.log("Login response status:", loginResponse.status)
+    console.log("Login response URL:", loginResponse.url)
 
-    // Giriş başarılı mı kontrol et
-    if (loginResponse.status !== 302 && loginResponse.status !== 200) {
+    // 303 yönlendirmesi veya diğer yönlendirmeler için
+    if (loginResponse.status === 303 || loginResponse.status === 302 || loginResponse.status === 301) {
+      const redirectUrl = loginResponse.headers.get("location")
+      console.log("Redirecting to:", redirectUrl)
+
+      if (!redirectUrl) {
+        throw new Error("Yönlendirme URL'si bulunamadı")
+      }
+
+      // Yönlendirme çerezlerini al
+      const redirectCookies = parseCookies(loginResponse.headers.get("set-cookie") || "")
+      const allCookies = { ...cookies, ...redirectCookies }
+
+      // Yönlendirme URL'sine git
+      const redirectResponse = await fetch(
+        redirectUrl.startsWith("http") ? redirectUrl : `https://www.linkedin.com${redirectUrl}`,
+        {
+          method: "GET",
+          headers: {
+            ...headers,
+            Cookie: formatCookies(allCookies),
+          },
+          redirect: "follow",
+        },
+      )
+
+      // Yeni çerezleri ekle
+      const newCookies = parseCookies(redirectResponse.headers.get("set-cookie") || "")
+      Object.assign(allCookies, newCookies)
+
+      // Giriş başarılı mı kontrol et
+      if (!allCookies["li_at"] && !allCookies["JSESSIONID"]) {
+        const redirectHtml = await redirectResponse.text()
+
+        if (redirectHtml.includes("captcha") || redirectHtml.includes("CAPTCHA")) {
+          throw new Error("LinkedIn CAPTCHA doğrulaması gerektiriyor")
+        }
+
+        if (redirectHtml.includes("challenge") || redirectHtml.includes("verification")) {
+          throw new Error("LinkedIn ek doğrulama gerektiriyor")
+        }
+
+        if (redirectHtml.includes("error") || redirectHtml.includes("incorrect")) {
+          throw new Error("LinkedIn giriş başarısız - geçersiz kimlik bilgileri")
+        }
+
+        throw new Error("LinkedIn giriş başarısız - bilinmeyen hata")
+      }
+
+      // Adım 3: Bağlantılar sayfasını yükle
+      console.log("Bağlantılar sayfası yükleniyor...")
+      let connectionsUrl = "https://www.linkedin.com/mynetwork/invite-connect/connections/"
+
+      // İkinci derece bağlantılar için
+      if (degree === 2 && connectionId) {
+        // Profil URL'si mi yoksa ID mi kontrol et
+        if (connectionId.startsWith("http")) {
+          connectionsUrl = `${connectionId}/connections/`
+        } else {
+          connectionsUrl = `https://www.linkedin.com/in/${connectionId}/connections/`
+        }
+      }
+
+      const connectionsResponse = await fetch(connectionsUrl, {
+        method: "GET",
+        headers: {
+          ...headers,
+          Cookie: formatCookies(allCookies),
+        },
+      })
+
+      if (!connectionsResponse.ok) {
+        throw new Error(`Bağlantılar sayfası yüklenemedi: ${connectionsResponse.status}`)
+      }
+
+      const connectionsHtml = await connectionsResponse.text()
+
+      // Oturum hala açık mı kontrol et
+      if (connectionsHtml.includes("login") && connectionsHtml.includes("session_password")) {
+        throw new Error("LinkedIn oturumu sona erdi")
+      }
+
+      // Adım 4: Bağlantıları HTML'den çıkar
+      console.log("Bağlantılar çıkarılıyor...")
+      const connections = extractConnectionsFromHtml(connectionsHtml)
+
+      console.log(`${connections.length} bağlantı başarıyla çıkarıldı`)
+      return connections
+    } else if (loginResponse.ok) {
+      // Başarılı giriş, çerezleri al
+      const responseCookies = parseCookies(loginResponse.headers.get("set-cookie") || "")
+      const allCookies = { ...cookies, ...responseCookies }
+
+      // Giriş başarılı mı kontrol et
+      if (!allCookies["li_at"] && !allCookies["JSESSIONID"]) {
+        const loginResponseHtml = await loginResponse.text()
+
+        if (loginResponseHtml.includes("captcha") || loginResponseHtml.includes("CAPTCHA")) {
+          throw new Error("LinkedIn CAPTCHA doğrulaması gerektiriyor")
+        }
+
+        if (loginResponseHtml.includes("challenge") || loginResponseHtml.includes("verification")) {
+          throw new Error("LinkedIn ek doğrulama gerektiriyor")
+        }
+
+        throw new Error("LinkedIn giriş başarısız - geçersiz kimlik bilgileri")
+      }
+
+      // Adım 3: Bağlantılar sayfasını yükle
+      console.log("Bağlantılar sayfası yükleniyor...")
+      let connectionsUrl = "https://www.linkedin.com/mynetwork/invite-connect/connections/"
+
+      // İkinci derece bağlantılar için
+      if (degree === 2 && connectionId) {
+        // Profil URL'si mi yoksa ID mi kontrol et
+        if (connectionId.startsWith("http")) {
+          connectionsUrl = `${connectionId}/connections/`
+        } else {
+          connectionsUrl = `https://www.linkedin.com/in/${connectionId}/connections/`
+        }
+      }
+
+      const connectionsResponse = await fetch(connectionsUrl, {
+        method: "GET",
+        headers: {
+          ...headers,
+          Cookie: formatCookies(allCookies),
+        },
+      })
+
+      if (!connectionsResponse.ok) {
+        throw new Error(`Bağlantılar sayfası yüklenemedi: ${connectionsResponse.status}`)
+      }
+
+      const connectionsHtml = await connectionsResponse.text()
+
+      // Oturum hala açık mı kontrol et
+      if (connectionsHtml.includes("login") && connectionsHtml.includes("session_password")) {
+        throw new Error("LinkedIn oturumu sona erdi")
+      }
+
+      // Adım 4: Bağlantıları HTML'den çıkar
+      console.log("Bağlantılar çıkarılıyor...")
+      const connections = extractConnectionsFromHtml(connectionsHtml)
+
+      console.log(`${connections.length} bağlantı başarıyla çıkarıldı`)
+      return connections
+    } else {
       throw new Error(`LinkedIn giriş başarısız: ${loginResponse.status}`)
     }
-
-    // Önemli çerezleri kontrol et
-    if (!allCookies["li_at"] && !allCookies["JSESSIONID"]) {
-      // Giriş sayfasının içeriğini kontrol et
-      const loginResponseHtml = await loginResponse.text()
-
-      if (loginResponseHtml.includes("captcha") || loginResponseHtml.includes("CAPTCHA")) {
-        throw new Error("LinkedIn CAPTCHA doğrulaması gerektiriyor")
-      }
-
-      if (loginResponseHtml.includes("challenge") || loginResponseHtml.includes("verification")) {
-        throw new Error("LinkedIn ek doğrulama gerektiriyor")
-      }
-
-      throw new Error("LinkedIn giriş başarısız - geçersiz kimlik bilgileri")
-    }
-
-    // Adım 3: Bağlantılar sayfasını yükle
-    console.log("Bağlantılar sayfası yükleniyor...")
-    let connectionsUrl = "https://www.linkedin.com/mynetwork/invite-connect/connections/"
-
-    // İkinci derece bağlantılar için
-    if (degree === 2 && connectionId) {
-      // Profil URL'si mi yoksa ID mi kontrol et
-      if (connectionId.startsWith("http")) {
-        connectionsUrl = `${connectionId}/connections/`
-      } else {
-        connectionsUrl = `https://www.linkedin.com/in/${connectionId}/connections/`
-      }
-    }
-
-    const connectionsResponse = await fetch(connectionsUrl, {
-      method: "GET",
-      headers: {
-        ...headers,
-        Cookie: formatCookies(allCookies),
-      },
-    })
-
-    if (!connectionsResponse.ok) {
-      throw new Error(`Bağlantılar sayfası yüklenemedi: ${connectionsResponse.status}`)
-    }
-
-    const connectionsHtml = await connectionsResponse.text()
-
-    // Oturum hala açık mı kontrol et
-    if (connectionsHtml.includes("login") && connectionsHtml.includes("session_password")) {
-      throw new Error("LinkedIn oturumu sona erdi")
-    }
-
-    // Adım 4: Bağlantıları HTML'den çıkar
-    console.log("Bağlantılar çıkarılıyor...")
-    const connections = extractConnectionsFromHtml(connectionsHtml)
-
-    console.log(`${connections.length} bağlantı başarıyla çıkarıldı`)
-    return connections
   } catch (error) {
     console.error("LinkedIn scraping hatası:", error)
     throw error
@@ -365,4 +468,55 @@ function formatCookies(cookies: Record<string, string>): string {
   return Object.entries(cookies)
     .map(([name, value]) => `${name}=${value}`)
     .join("; ")
+}
+
+// Mock bağlantılar oluştur
+function generateMockConnections(count = 10) {
+  const companies = [
+    "Google",
+    "Microsoft",
+    "Amazon",
+    "Apple",
+    "Facebook",
+    "Netflix",
+    "Tesla",
+    "Twitter",
+    "LinkedIn",
+    "Vercel",
+  ]
+  const titles = [
+    "Software Engineer",
+    "Product Manager",
+    "Data Scientist",
+    "UX Designer",
+    "Marketing Manager",
+    "CEO",
+    "CTO",
+    "COO",
+    "CFO",
+    "VP of Engineering",
+  ]
+  const locations = [
+    "San Francisco, CA",
+    "New York, NY",
+    "Seattle, WA",
+    "Austin, TX",
+    "Boston, MA",
+    "Chicago, IL",
+    "Los Angeles, CA",
+    "Denver, CO",
+    "Atlanta, GA",
+    "Miami, FL",
+  ]
+
+  return Array.from({ length: count }, (_, i) => ({
+    name: `Mock Connection ${i + 1}`,
+    title: titles[Math.floor(Math.random() * titles.length)],
+    company: companies[Math.floor(Math.random() * companies.length)],
+    location: locations[Math.floor(Math.random() * locations.length)],
+    profileUrl: `https://linkedin.com/in/mock-connection-${i + 1}`,
+    id: `mock-${i + 1}`,
+    mutualConnections: Math.floor(Math.random() * 50),
+    isMockData: true,
+  }))
 }
