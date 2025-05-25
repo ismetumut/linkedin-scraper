@@ -79,7 +79,7 @@ export async function POST(request: NextRequest) {
             "Cache-Control": "no-cache",
           },
           body: JSON.stringify(requestBody),
-          signal: AbortSignal.timeout(30000), // 30 second timeout
+          signal: AbortSignal.timeout(60000), // 60 second timeout
         })
 
         logger.info(`Response status: ${response.status}`, { requestId })
