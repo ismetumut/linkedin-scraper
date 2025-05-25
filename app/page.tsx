@@ -48,7 +48,8 @@ const LinkedInTrackerWithScraper = () => {
   const [lastError, setLastError] = useState(null)
   const [showAlternatives, setShowAlternatives] = useState(false)
   const [railwayTestResults, setRailwayTestResults] = useState(null)
-  const [useDirectScraping, setUseDirectScraping] = useState(true) // Doğrudan scraping kullan
+  const [useScrapingBee, setUseScrapingBee] = useState(true) // ScrapingBee kullan
+  const [linkedinCookies, setLinkedinCookies] = useState("")
 
   const [credentials, setCredentials] = useState(() => {
     if (typeof window !== "undefined") {
@@ -292,9 +293,16 @@ const LinkedInTrackerWithScraper = () => {
   const testApiConnection = async () => {
     setApiStatus("testing")
     try {
-      // Doğrudan scraping API'sini test et
-      const response = await fetch("/api/linkedin-direct", {
-        method: "GET",
+      // ScrapingBee API'sini test et
+      const response = await fetch("/api/linkedin-connections", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          cookies: "test-cookie",
+          profileUrl: "https://www.linkedin.com/mynetwork/invite-connect/connections/",
+        }),
       })
 
       if (response.ok) {
@@ -313,7 +321,7 @@ const LinkedInTrackerWithScraper = () => {
     }
   }
 
-  const testDirectScraping = async () => {
+  const loginToLinkedIn = async () => {
     try {
       if (!credentials.email || !credentials.password) {
         alert("Lütfen önce LinkedIn kimlik bilgilerinizi girin")
@@ -321,9 +329,10 @@ const LinkedInTrackerWithScraper = () => {
         return
       }
 
-      setScrapingStatus("testing")
+      setScrapingStatus("logging-in")
+      setLastError(null)
 
-      const response = await fetch("/api/linkedin-direct", {
+      const response = await fetch("/api/linkedin-login", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -331,25 +340,60 @@ const LinkedInTrackerWithScraper = () => {
         body: JSON.stringify({
           email: credentials.email,
           password: credentials.password,
-          degree: 1,
         }),
       })
 
       const result = await response.json()
 
-      if (response.ok) {
-        alert(`Test başarılı! ${result.connections?.length || 0} bağlantı bulundu.`)
-        console.log("Test sonucu:", result)
+      if (response.ok && result.success) {
+        setLinkedinCookies(result.cookies)
+        localStorage.setItem("linkedinCookies", result.cookies)
+        setScrapingStatus("idle")
+        setApiStatus("connected")
+        alert("✅ LinkedIn'e başarıyla giriş yapıldı! Şimdi bağlantılarınızı çekebilirsiniz.")
+        return result.cookies
       } else {
-        alert(`Test başarısız: ${result.error || response.status}`)
-        console.error("Test hatası:", result)
+        setScrapingStatus("error")
+        setLastError(result.error || "LinkedIn giriş başarısız")
+        alert(`❌ LinkedIn giriş başarısız: ${result.error}`)
+        return null
+      }
+    } catch (error) {
+      setScrapingStatus("error")
+      setLastError(`Login error: ${error.message}`)
+      alert(`❌ Giriş hatası: ${error.message}`)
+      return null
+    }
+  }
+
+  const fetchLinkedInConnections = async (cookies, profileUrl = null) => {
+    try {
+      const response = await fetch("/api/linkedin-connections", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          cookies,
+          profileUrl,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || `HTTP error ${response.status}`)
       }
 
-      setScrapingStatus("idle")
+      const data = await response.json()
+
+      if (data.error) {
+        throw new Error(data.error)
+      }
+
+      return data.connections || []
     } catch (error) {
-      alert(`Test hatası: ${error.message}`)
-      console.error("Test hatası:", error)
-      setScrapingStatus("idle")
+      console.error("Bağlantıları çekerken hata:", error)
+      throw error
     }
   }
 
@@ -358,80 +402,51 @@ const LinkedInTrackerWithScraper = () => {
     setScrapingProgress({ current: 0, total: 0 })
     setLastError(null)
 
-    // Validate credentials first
-    if (!credentials.email || !credentials.password) {
-      setScrapingStatus("error")
-      setLastError("Please enter your LinkedIn email and password in Settings")
-      if (!isAutomated) {
-        alert("❌ Please enter your LinkedIn credentials in the Settings panel first!")
-      }
-      return
-    }
-
     try {
+      // Çerezleri al veya giriş yap
+      let cookies = localStorage.getItem("linkedinCookies") || linkedinCookies
+
+      if (!cookies) {
+        cookies = await loginToLinkedIn()
+        if (!cookies) {
+          throw new Error("LinkedIn giriş başarısız")
+        }
+      }
+
       // Store previous second degree connections for comparison
       const previousSecondDegree = { ...secondDegreeConnections }
 
       // Step 1: Get first-degree connections
-      console.log("🔄 Starting LinkedIn connection analysis...")
-      console.log("📧 Using email:", credentials.email)
+      console.log("🔄 LinkedIn bağlantıları çekiliyor...")
+      setScrapingProgress({ current: 1, total: 1 })
 
-      // Doğrudan scraping API'sini kullan
-      const firstDegreeResponse = await fetch("/api/linkedin-direct", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email: credentials.email,
-          password: credentials.password,
-          degree: 1,
-        }),
-      })
-
-      console.log("📡 API Response Status:", firstDegreeResponse.status)
-
-      if (!firstDegreeResponse.ok) {
-        const errorResult = await firstDegreeResponse.json()
-        console.error("❌ API Error Response:", errorResult)
-
-        // Show specific error message and troubleshooting
-        setLastError(errorResult.error || `HTTP ${firstDegreeResponse.status}`)
-
-        throw new Error(errorResult.error || `HTTP ${firstDegreeResponse.status}`)
-      }
-
-      const firstDegreeResult = await firstDegreeResponse.json()
-      console.log("📊 Raw API Response:", firstDegreeResult)
-
-      const firstDegreeConnections = firstDegreeResult.connections || []
+      const firstDegreeConnections = await fetchLinkedInConnections(cookies)
 
       // Check if we got real data or empty array
       if (firstDegreeConnections.length === 0) {
         setScrapingStatus("error")
-        setLastError("No connections found. LinkedIn scraping failed or was blocked.")
+        setLastError("Bağlantı bulunamadı. LinkedIn oturumunuz sona ermiş olabilir.")
 
         if (!isAutomated) {
-          alert(`❌ No LinkedIn connections found!
+          alert(`❌ LinkedIn bağlantıları bulunamadı!
 
-This could mean:
-• LinkedIn blocked the scraping attempt
-• Your credentials are incorrect
-• Your account has restrictions
+Bu şu anlama gelebilir:
+• LinkedIn oturumunuz sona ermiş
+• Kimlik bilgileriniz yanlış
+• Hesabınızda kısıtlamalar var
 
-💡 Try these alternatives:
-1. Use the "Import CSV" button instead
-2. Export your data from LinkedIn Settings
-3. Check your LinkedIn credentials
-4. Try again in a few hours`)
+💡 Şu alternatifleri deneyin:
+1. Tekrar giriş yapın
+2. "Import CSV" butonunu kullanın
+3. LinkedIn kimlik bilgilerinizi kontrol edin`)
         }
         return
       }
 
-      console.log(`🎉 Successfully extracted ${firstDegreeConnections.length} connections`)
+      console.log(`🎉 ${firstDegreeConnections.length} bağlantı başarıyla çekildi`)
 
       if (firstDegreeConnections.length > 0) {
-        console.log("👤 Sample connection:", firstDegreeConnections[0])
+        console.log("👤 Örnek bağlantı:", firstDegreeConnections[0])
       }
 
       setMyConnections(firstDegreeConnections)
@@ -439,7 +454,7 @@ This could mean:
 
       // Step 2: Get second-degree connections for each first-degree connection
       if (scrapingSettings.includeSecondDegree && firstDegreeConnections.length > 0) {
-        console.log("🔄 Starting second-degree analysis...")
+        console.log("🔄 İkinci derece bağlantılar analiz ediliyor...")
         const secondDegreeData = {}
 
         for (let i = 0; i < Math.min(firstDegreeConnections.length, 3); i++) {
@@ -452,34 +467,23 @@ This could mean:
               await new Promise((resolve) => setTimeout(resolve, scrapingSettings.delay))
             }
 
-            console.log(`🔍 Analyzing ${connection.name}'s connections (${i + 1}/${firstDegreeConnections.length})`)
+            console.log(
+              `🔍 ${connection.name}'in bağlantıları analiz ediliyor (${i + 1}/${firstDegreeConnections.length})`,
+            )
 
-            const secondDegreeResponse = await fetch("/api/linkedin-direct", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                email: credentials.email,
-                password: credentials.password,
-                degree: 2,
-                connectionId: connection.id || connection.profileUrl,
-                connectionName: connection.name,
-              }),
-            })
-
-            if (secondDegreeResponse.ok) {
-              const secondDegreeResult = await secondDegreeResponse.json()
-              const secondDegreeConnections = secondDegreeResult.connections || []
-
+            if (connection.profileUrl) {
+              const secondDegreeConnections = await fetchLinkedInConnections(
+                cookies,
+                connection.profileUrl + "/connections/",
+              )
               secondDegreeData[connection.name] = secondDegreeConnections
-              console.log(`✅ Found ${secondDegreeConnections.length} connections for ${connection.name}`)
+              console.log(`✅ ${connection.name} için ${secondDegreeConnections.length} bağlantı bulundu`)
             } else {
-              console.warn(`⚠️ Failed to get second degree for ${connection.name}`)
+              console.warn(`⚠️ ${connection.name} için profil URL'si bulunamadı`)
               secondDegreeData[connection.name] = []
             }
           } catch (error) {
-            console.error(`❌ Error getting second degree for ${connection.name}:`, error)
+            console.error(`❌ ${connection.name} için ikinci derece bağlantıları çekerken hata:`, error)
             secondDegreeData[connection.name] = []
           }
 
@@ -491,16 +495,16 @@ This could mean:
         // Step 3: Detect newly added friends
         const newFriends = detectNewlyAddedFriends(secondDegreeData, previousSecondDegree)
         setNewlyAddedFriends(newFriends)
-        console.log(`🆕 Detected ${newFriends.length} newly added friends`)
+        console.log(`🆕 ${newFriends.length} yeni eklenen arkadaş tespit edildi`)
 
         // Step 4: Analyze friend list differences
         const differences = analyzeFriendListDifferences(firstDegreeConnections, secondDegreeData)
         setFriendListDifferences(differences)
-        console.log(`📊 Found ${differences.length} connection patterns`)
+        console.log(`📊 ${differences.length} bağlantı deseni bulundu`)
 
         // Step 5: Send email report if automated and new friends found
         if (isAutomated && newFriends.length > 0 && reportEmail) {
-          console.log("📧 Sending email report...")
+          console.log("📧 Email raporu gönderiliyor...")
           await sendExcelReport(newFriends)
         }
       }
@@ -510,8 +514,8 @@ This could mean:
       setApiStatus("connected")
 
       const message = isAutomated
-        ? `✅ Automated analysis completed! Found ${firstDegreeConnections.length} connections and ${newlyAddedFriends.length} newly added friends.`
-        : `✅ Successfully analyzed ${firstDegreeConnections.length} connections!`
+        ? `✅ Otomatik analiz tamamlandı! ${firstDegreeConnections.length} bağlantı ve ${newlyAddedFriends.length} yeni eklenen arkadaş bulundu.`
+        : `✅ ${firstDegreeConnections.length} bağlantı başarıyla analiz edildi!`
 
       if (!isAutomated) {
         alert(message)
@@ -522,28 +526,28 @@ This could mean:
       // Switch to first-degree tab to show results
       setCurrentTab("first-degree")
     } catch (error) {
-      console.error("❌ Scraping error:", error)
+      console.error("❌ Scraping hatası:", error)
       setScrapingStatus("error")
       setApiStatus("error")
 
-      let errorMessage = "Unknown error occurred"
+      let errorMessage = "Bilinmeyen hata oluştu"
       if (error instanceof Error) {
         errorMessage = error.message
       }
 
       setLastError(errorMessage)
 
-      const fullErrorMessage = `❌ LinkedIn scraping failed: ${errorMessage}
+      const fullErrorMessage = `❌ LinkedIn scraping başarısız: ${errorMessage}
 
-💡 This is expected - LinkedIn actively blocks scraping attempts.
+💡 Bu beklenen bir durum - LinkedIn aktif olarak scraping girişimlerini engelliyor.
 
-🔧 Working alternatives:
-1. Click "Import CSV" and use LinkedIn's official export
-2. Go to linkedin.com/psettings/member-data
-3. Request "Connections" export
-4. Download and import the CSV file
+🔧 Çalışan alternatifler:
+1. "Import CSV" butonuna tıklayın ve LinkedIn'in resmi dışa aktarma özelliğini kullanın
+2. linkedin.com/psettings/member-data adresine gidin
+3. "Connections" dışa aktarımını isteyin
+4. CSV dosyasını indirin ve içe aktarın
 
-This method is 100% reliable and doesn't violate LinkedIn's terms.`
+Bu yöntem %100 güvenilirdir ve LinkedIn'in kullanım şartlarını ihlal etmez.`
 
       if (!isAutomated) {
         alert(fullErrorMessage)
@@ -719,11 +723,11 @@ This method is 100% reliable and doesn't violate LinkedIn's terms.`
               Test API
             </button>
             <button
-              onClick={testDirectScraping}
+              onClick={loginToLinkedIn}
               className="px-3 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
-              disabled={scrapingStatus === "testing"}
+              disabled={scrapingStatus === "logging-in"}
             >
-              Test Scraping
+              Login to LinkedIn
             </button>
           </div>
         </div>
@@ -740,19 +744,19 @@ This method is 100% reliable and doesn't violate LinkedIn's terms.`
         <div className="flex items-center gap-2">
           <input
             type="checkbox"
-            id="useDirectScraping"
-            checked={useDirectScraping}
-            onChange={(e) => setUseDirectScraping(e.target.checked)}
+            id="useScrapingBee"
+            checked={useScrapingBee}
+            onChange={(e) => setUseScrapingBee(e.target.checked)}
             className="rounded border-blue-300 text-blue-600 focus:ring-blue-500"
           />
-          <label htmlFor="useDirectScraping" className="text-sm text-blue-700">
-            Use direct LinkedIn scraping (recommended)
+          <label htmlFor="useScrapingBee" className="text-sm text-blue-700">
+            Use ScrapingBee (recommended)
           </label>
         </div>
         <p className="text-xs text-blue-600 mt-1">
-          {useDirectScraping
-            ? "Using direct scraping method that doesn't rely on external services."
-            : "Using external Railway API (currently unavailable)."}
+          {useScrapingBee
+            ? "Using ScrapingBee for reliable LinkedIn scraping with proxy rotation and CAPTCHA solving."
+            : "Using direct scraping method (less reliable)."}
         </p>
       </div>
 
@@ -844,9 +848,15 @@ This method is 100% reliable and doesn't violate LinkedIn's terms.`
       <div className="text-sm text-gray-500">
         Status:{" "}
         <span
-          className={`font-medium ${scrapingStatus === "running" ? "text-blue-600" : scrapingStatus === "error" ? "text-red-600" : "text-green-600"}`}
+          className={`font-medium ${
+            scrapingStatus === "running" || scrapingStatus === "logging-in"
+              ? "text-blue-600"
+              : scrapingStatus === "error"
+                ? "text-red-600"
+                : "text-green-600"
+          }`}
         >
-          {scrapingStatus}
+          {scrapingStatus === "logging-in" ? "Logging in to LinkedIn..." : scrapingStatus}
         </span>
         {scrapingStatus === "running" && ` (${scrapingProgress.current}/${scrapingProgress.total})`}
       </div>
@@ -1157,6 +1167,29 @@ This method is 100% reliable and doesn't violate LinkedIn's terms.`
                 </div>
               </div>
 
+              {/* ScrapingBee Settings */}
+              <div className="border-t pt-4">
+                <h3 className="font-medium text-gray-900 mb-2">ScrapingBee Settings</h3>
+                <p className="text-xs text-gray-600 mb-2">
+                  ScrapingBee is a web scraping API that handles proxy rotation and CAPTCHA solving. You need to set the
+                  SCRAPINGBEE_API_KEY environment variable in your Vercel project.
+                </p>
+                <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                  <p className="text-xs text-yellow-700">
+                    <strong>Note:</strong> You need to sign up for a ScrapingBee account at{" "}
+                    <a
+                      href="https://www.scrapingbee.com"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline"
+                    >
+                      scrapingbee.com
+                    </a>{" "}
+                    and add your API key to your Vercel environment variables.
+                  </p>
+                </div>
+              </div>
+
               {/* Scheduler Settings */}
               <div className="border-t pt-4">
                 <h3 className="font-medium text-gray-900 mb-2">Daily Scheduler</h3>
@@ -1256,28 +1289,17 @@ This method is 100% reliable and doesn't violate LinkedIn's terms.`
                 </p>
               </div>
 
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                <div className="flex items-center space-x-2 text-blue-800 text-sm">
-                  <Network size={16} />
-                  <span className="font-medium">Direct Scraping:</span>
-                </div>
-                <p className="text-blue-700 text-xs mt-1">
-                  This application now uses direct LinkedIn scraping without relying on external services. This method
-                  is more reliable but may be detected by LinkedIn's security systems.
-                </p>
-              </div>
-
               <button
                 onClick={() => {
                   setShowSetup(false)
                   if (credentials.email && credentials.password) {
-                    startScraping(false)
+                    loginToLinkedIn()
                   }
                 }}
                 className="w-full bg-blue-600 text-white py-3 sm:py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm sm:text-base font-medium"
                 disabled={!credentials.email || !credentials.password}
               >
-                Save Settings & Start Analysis
+                Save Settings & Login to LinkedIn
               </button>
             </div>
           </div>
