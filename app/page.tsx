@@ -685,6 +685,45 @@ This method is 100% reliable and doesn't violate LinkedIn's terms.`
         )}
       </div>
 
+      {/* Debug API Routes */}
+      <div className="mb-4 p-3 border border-gray-300 rounded-lg bg-gray-50">
+        <h3 className="text-sm font-medium mb-2">Debug API Routes:</h3>
+        <div className="flex gap-2">
+          <button
+            onClick={async () => {
+              try {
+                const res = await fetch("/api/test")
+                const data = await res.json()
+                console.log("Test API response:", data)
+                alert("Test API: " + JSON.stringify(data))
+              } catch (err) {
+                console.error("Test API error:", err)
+                alert("Test API error: " + err.message)
+              }
+            }}
+            className="px-2 py-1 text-xs bg-gray-600 text-white rounded hover:bg-gray-700"
+          >
+            Test /api/test
+          </button>
+          <button
+            onClick={async () => {
+              try {
+                const res = await fetch("/api/linkedin-scraper")
+                const data = await res.json()
+                console.log("LinkedIn API GET response:", data)
+                alert("LinkedIn API GET: " + JSON.stringify(data).substring(0, 100) + "...")
+              } catch (err) {
+                console.error("LinkedIn API error:", err)
+                alert("LinkedIn API error: " + err.message)
+              }
+            }}
+            className="px-2 py-1 text-xs bg-gray-600 text-white rounded hover:bg-gray-700"
+          >
+            Test /api/linkedin-scraper GET
+          </button>
+        </div>
+      </div>
+
       <div className="mb-6 p-3 sm:p-4 bg-blue-50 border border-blue-200 rounded-lg">
         <div className="flex flex-col sm:flex-row items-center justify-center gap-2 sm:gap-4">
           <div className="flex items-center gap-2">
