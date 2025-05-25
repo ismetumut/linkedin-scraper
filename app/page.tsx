@@ -47,6 +47,8 @@ const LinkedInTrackerWithScraper = () => {
   const [apiStatus, setApiStatus] = useState("unknown")
   const [lastError, setLastError] = useState(null)
   const [showAlternatives, setShowAlternatives] = useState(false)
+  const [railwayTestResults, setRailwayTestResults] = useState(null)
+  const [useDirectScraping, setUseDirectScraping] = useState(true) // Doğrudan scraping kullan
 
   const [credentials, setCredentials] = useState(() => {
     if (typeof window !== "undefined") {
@@ -290,7 +292,8 @@ const LinkedInTrackerWithScraper = () => {
   const testApiConnection = async () => {
     setApiStatus("testing")
     try {
-      const response = await fetch("/api/linkedin-scraper", {
+      // Doğrudan scraping API'sini test et
+      const response = await fetch("/api/linkedin-direct", {
         method: "GET",
       })
 
@@ -307,6 +310,46 @@ const LinkedInTrackerWithScraper = () => {
     } catch (error) {
       setApiStatus("error")
       setLastError(`Connection failed: ${error.message}`)
+    }
+  }
+
+  const testDirectScraping = async () => {
+    try {
+      if (!credentials.email || !credentials.password) {
+        alert("Lütfen önce LinkedIn kimlik bilgilerinizi girin")
+        setShowSetup(true)
+        return
+      }
+
+      setScrapingStatus("testing")
+
+      const response = await fetch("/api/linkedin-direct", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email: credentials.email,
+          password: credentials.password,
+          degree: 1,
+        }),
+      })
+
+      const result = await response.json()
+
+      if (response.ok) {
+        alert(`Test başarılı! ${result.connections?.length || 0} bağlantı bulundu.`)
+        console.log("Test sonucu:", result)
+      } else {
+        alert(`Test başarısız: ${result.error || response.status}`)
+        console.error("Test hatası:", result)
+      }
+
+      setScrapingStatus("idle")
+    } catch (error) {
+      alert(`Test hatası: ${error.message}`)
+      console.error("Test hatası:", error)
+      setScrapingStatus("idle")
     }
   }
 
@@ -330,10 +373,11 @@ const LinkedInTrackerWithScraper = () => {
       const previousSecondDegree = { ...secondDegreeConnections }
 
       // Step 1: Get first-degree connections
-      console.log("🔄 Starting REAL LinkedIn connection analysis...")
+      console.log("🔄 Starting LinkedIn connection analysis...")
       console.log("📧 Using email:", credentials.email)
 
-      const firstDegreeResponse = await fetch("/api/linkedin-scraper", {
+      // Doğrudan scraping API'sini kullan
+      const firstDegreeResponse = await fetch("/api/linkedin-direct", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -353,10 +397,6 @@ const LinkedInTrackerWithScraper = () => {
 
         // Show specific error message and troubleshooting
         setLastError(errorResult.error || `HTTP ${firstDegreeResponse.status}`)
-
-        if (errorResult.troubleshooting) {
-          console.log("💡 Troubleshooting suggestions:", errorResult.troubleshooting.nextSteps)
-        }
 
         throw new Error(errorResult.error || `HTTP ${firstDegreeResponse.status}`)
       }
@@ -388,7 +428,7 @@ This could mean:
         return
       }
 
-      console.log(`🎉 Successfully extracted ${firstDegreeConnections.length} REAL first-degree connections`)
+      console.log(`🎉 Successfully extracted ${firstDegreeConnections.length} connections`)
 
       if (firstDegreeConnections.length > 0) {
         console.log("👤 Sample connection:", firstDegreeConnections[0])
@@ -414,7 +454,7 @@ This could mean:
 
             console.log(`🔍 Analyzing ${connection.name}'s connections (${i + 1}/${firstDegreeConnections.length})`)
 
-            const secondDegreeResponse = await fetch("/api/linkedin-scraper", {
+            const secondDegreeResponse = await fetch("/api/linkedin-direct", {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
@@ -470,8 +510,8 @@ This could mean:
       setApiStatus("connected")
 
       const message = isAutomated
-        ? `✅ Automated analysis completed! Found ${firstDegreeConnections.length} REAL connections and ${newlyAddedFriends.length} newly added friends.`
-        : `✅ Successfully analyzed ${firstDegreeConnections.length} REAL first-degree connections!`
+        ? `✅ Automated analysis completed! Found ${firstDegreeConnections.length} connections and ${newlyAddedFriends.length} newly added friends.`
+        : `✅ Successfully analyzed ${firstDegreeConnections.length} connections!`
 
       if (!isAutomated) {
         alert(message)
@@ -493,7 +533,7 @@ This could mean:
 
       setLastError(errorMessage)
 
-      const fullErrorMessage = `❌ Real LinkedIn scraping failed: ${errorMessage}
+      const fullErrorMessage = `❌ LinkedIn scraping failed: ${errorMessage}
 
 💡 This is expected - LinkedIn actively blocks scraping attempts.
 
@@ -670,13 +710,22 @@ This method is 100% reliable and doesn't violate LinkedIn's terms.`
               API Status: {apiStatus === "connected" ? "Ready" : apiStatus === "error" ? "Error" : "Unknown"}
             </span>
           </div>
-          <button
-            onClick={testApiConnection}
-            className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
-            disabled={apiStatus === "testing"}
-          >
-            Test API
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={testApiConnection}
+              className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+              disabled={apiStatus === "testing"}
+            >
+              Test API
+            </button>
+            <button
+              onClick={testDirectScraping}
+              className="px-3 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+              disabled={scrapingStatus === "testing"}
+            >
+              Test Scraping
+            </button>
+          </div>
         </div>
         {lastError && (
           <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
@@ -685,43 +734,26 @@ This method is 100% reliable and doesn't violate LinkedIn's terms.`
         )}
       </div>
 
-      {/* Debug API Routes */}
-      <div className="mb-4 p-3 border border-gray-300 rounded-lg bg-gray-50">
-        <h3 className="text-sm font-medium mb-2">Debug API Routes:</h3>
-        <div className="flex gap-2">
-          <button
-            onClick={async () => {
-              try {
-                const res = await fetch("/api/test")
-                const data = await res.json()
-                console.log("Test API response:", data)
-                alert("Test API: " + JSON.stringify(data))
-              } catch (err) {
-                console.error("Test API error:", err)
-                alert("Test API error: " + err.message)
-              }
-            }}
-            className="px-2 py-1 text-xs bg-gray-600 text-white rounded hover:bg-gray-700"
-          >
-            Test /api/test
-          </button>
-          <button
-            onClick={async () => {
-              try {
-                const res = await fetch("/api/linkedin-scraper")
-                const data = await res.json()
-                console.log("LinkedIn API GET response:", data)
-                alert("LinkedIn API GET: " + JSON.stringify(data).substring(0, 100) + "...")
-              } catch (err) {
-                console.error("LinkedIn API error:", err)
-                alert("LinkedIn API error: " + err.message)
-              }
-            }}
-            className="px-2 py-1 text-xs bg-gray-600 text-white rounded hover:bg-gray-700"
-          >
-            Test /api/linkedin-scraper GET
-          </button>
+      {/* Scraping Method */}
+      <div className="mb-4 p-3 border border-blue-200 rounded-lg bg-blue-50">
+        <h3 className="text-sm font-medium mb-2 text-blue-800">Scraping Method:</h3>
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="useDirectScraping"
+            checked={useDirectScraping}
+            onChange={(e) => setUseDirectScraping(e.target.checked)}
+            className="rounded border-blue-300 text-blue-600 focus:ring-blue-500"
+          />
+          <label htmlFor="useDirectScraping" className="text-sm text-blue-700">
+            Use direct LinkedIn scraping (recommended)
+          </label>
         </div>
+        <p className="text-xs text-blue-600 mt-1">
+          {useDirectScraping
+            ? "Using direct scraping method that doesn't rely on external services."
+            : "Using external Railway API (currently unavailable)."}
+        </p>
       </div>
 
       <div className="mb-6 p-3 sm:p-4 bg-blue-50 border border-blue-200 rounded-lg">
@@ -886,6 +918,11 @@ This method is 100% reliable and doesn't violate LinkedIn's terms.`
                       {secondDegreeConnections[connection.name].length} second-degree connections
                     </p>
                   )}
+                  {connection.isMockData && (
+                    <div className="mt-1 px-1.5 py-0.5 bg-yellow-100 text-yellow-800 text-xs inline-block rounded">
+                      Mock Data
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -965,6 +1002,11 @@ This method is 100% reliable and doesn't violate LinkedIn's terms.`
                           <h4 className="font-medium text-sm text-gray-900">{connection.name || "Unknown"}</h4>
                           <p className="text-xs text-gray-600">{connection.title || "No title"}</p>
                           <p className="text-xs text-gray-500">{connection.company || "No company"}</p>
+                          {connection.isMockData && (
+                            <div className="mt-1 px-1.5 py-0.5 bg-yellow-100 text-yellow-800 text-xs inline-block rounded">
+                              Mock Data
+                            </div>
+                          )}
                         </div>
                       ))}
                   </div>
@@ -995,6 +1037,11 @@ This method is 100% reliable and doesn't violate LinkedIn's terms.`
                       Detected: {new Date(friend.detectedAt).toLocaleDateString()}
                     </p>
                   </div>
+                  {friend.isMockData && (
+                    <div className="mt-1 px-1.5 py-0.5 bg-yellow-100 text-yellow-800 text-xs inline-block rounded">
+                      Mock Data
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -1035,6 +1082,12 @@ This method is 100% reliable and doesn't violate LinkedIn's terms.`
                       Mutual connection with {difference.mutualConnectionCount} people:
                     </p>
                     <p className="text-xs text-orange-600">{difference.mutualWith.join(", ")}</p>
+                  </div>
+                )}
+
+                {difference.isMockData && (
+                  <div className="mt-1 px-1.5 py-0.5 bg-yellow-100 text-yellow-800 text-xs inline-block rounded">
+                    Mock Data
                   </div>
                 )}
               </div>
@@ -1206,11 +1259,11 @@ This method is 100% reliable and doesn't violate LinkedIn's terms.`
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                 <div className="flex items-center space-x-2 text-blue-800 text-sm">
                   <Network size={16} />
-                  <span className="font-medium">External API:</span>
+                  <span className="font-medium">Direct Scraping:</span>
                 </div>
                 <p className="text-blue-700 text-xs mt-1">
-                  This application uses an external API hosted on Railway for LinkedIn data extraction. The API handles
-                  all the complex scraping logic and security measures.
+                  This application now uses direct LinkedIn scraping without relying on external services. This method
+                  is more reliable but may be detected by LinkedIn's security systems.
                 </p>
               </div>
 
