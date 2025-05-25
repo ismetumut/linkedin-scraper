@@ -18,20 +18,24 @@ export async function GET() {
       render_js: "false",
     }).toString()
 
+    console.log("Testing ScrapingBee connection...")
     const response = await fetch(`${apiUrl}?${params}`)
 
     if (!response.ok) {
+      const errorText = await response.text()
+      console.error("ScrapingBee test failed:", errorText)
       return NextResponse.json(
         {
           error: "ScrapingBee test failed",
           status: response.status,
-          details: await response.text(),
+          details: errorText,
         },
         { status: 500 },
       )
     }
 
     const data = await response.json()
+    console.log("ScrapingBee test successful")
 
     return NextResponse.json({
       success: true,
@@ -45,6 +49,7 @@ export async function GET() {
       {
         error: "Failed to test ScrapingBee",
         message: error.message,
+        stack: error.stack, // Include stack trace for debugging
       },
       { status: 500 },
     )

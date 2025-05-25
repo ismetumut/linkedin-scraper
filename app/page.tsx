@@ -293,7 +293,31 @@ const LinkedInTrackerWithScraper = () => {
   const testApiConnection = async () => {
     setApiStatus("testing")
     try {
-      // ScrapingBee API'sini test et - use properly formatted test cookie
+      // First test the ScrapingBee connection
+      console.log("Testing ScrapingBee connection...")
+      const scrapingBeeTest = await fetch("/api/test-scrapingbee")
+
+      if (!scrapingBeeTest.ok) {
+        const errorData = await scrapingBeeTest.json()
+        setApiStatus("error")
+        setLastError(`ScrapingBee test failed: ${JSON.stringify(errorData)}`)
+        return
+      }
+
+      console.log("ScrapingBee connection successful, testing Cheerio...")
+
+      // Then test Cheerio functionality
+      const cheerioTest = await fetch("/api/debug-cheerio")
+
+      if (!cheerioTest.ok) {
+        const errorData = await cheerioTest.json()
+        setApiStatus("error")
+        setLastError(`Cheerio test failed: ${JSON.stringify(errorData)}`)
+        return
+      }
+
+      // Finally test the LinkedIn connections API with a properly formatted test cookie
+      console.log("Testing LinkedIn connections API...")
       const response = await fetch("/api/linkedin-connections", {
         method: "POST",
         headers: {
@@ -305,15 +329,15 @@ const LinkedInTrackerWithScraper = () => {
         }),
       })
 
+      const data = await response.json()
+
       if (response.ok) {
         setApiStatus("connected")
         setLastError(null)
-        const data = await response.json()
         console.log("API test successful:", data)
       } else {
         setApiStatus("error")
-        const errorData = await response.json()
-        setLastError(`API test failed: ${response.status} - ${JSON.stringify(errorData)}`)
+        setLastError(`API test failed: ${response.status} - ${JSON.stringify(data)}`)
       }
     } catch (error) {
       setApiStatus("error")
