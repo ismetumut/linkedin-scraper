@@ -293,14 +293,14 @@ const LinkedInTrackerWithScraper = () => {
   const testApiConnection = async () => {
     setApiStatus("testing")
     try {
-      // ScrapingBee API'sini test et
+      // ScrapingBee API'sini test et - use properly formatted test cookie
       const response = await fetch("/api/linkedin-connections", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          cookies: "test-cookie",
+          cookies: "test_cookie=test_value;session_id=12345", // Proper format: no spaces
           profileUrl: "https://www.linkedin.com/mynetwork/invite-connect/connections/",
         }),
       })
@@ -312,8 +312,8 @@ const LinkedInTrackerWithScraper = () => {
         console.log("API test successful:", data)
       } else {
         setApiStatus("error")
-        const errorText = await response.text()
-        setLastError(`API test failed: ${response.status} - ${errorText}`)
+        const errorData = await response.json()
+        setLastError(`API test failed: ${response.status} - ${JSON.stringify(errorData)}`)
       }
     } catch (error) {
       setApiStatus("error")
@@ -368,13 +368,20 @@ const LinkedInTrackerWithScraper = () => {
 
   const fetchLinkedInConnections = async (cookies, profileUrl = null) => {
     try {
+      // Ensure cookies are properly formatted
+      let formattedCookies = cookies
+      if (cookies && cookies.includes("; ")) {
+        // Remove spaces after semicolons
+        formattedCookies = cookies.replace(/;\s+/g, ";")
+      }
+
       const response = await fetch("/api/linkedin-connections", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          cookies,
+          cookies: formattedCookies,
           profileUrl,
         }),
       })

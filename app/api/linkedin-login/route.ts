@@ -176,7 +176,8 @@ function parseCookieHeader(setCookieHeader: string): string {
     }
   })
 
-  return cookiePairs.join("; ")
+  // ScrapingBee format: no spaces after semicolons
+  return cookiePairs.join(";")
 }
 
 // İki çerez string'ini birleştirir, aynı isimli çerezlerde ikinci string'deki değer kullanılır
@@ -184,19 +185,19 @@ function mergeCookieStrings(cookies1: string, cookies2: string): string {
   const cookieMap = new Map<string, string>()
 
   // İlk çerez string'ini ayrıştır
-  cookies1.split("; ").forEach((cookie) => {
+  cookies1.split(/;\s*/).forEach((cookie) => {
     const [name, value] = cookie.split("=")
-    if (name && value) cookieMap.set(name, value)
+    if (name && value) cookieMap.set(name.trim(), value.trim())
   })
 
   // İkinci çerez string'ini ayrıştır ve varsa üzerine yaz
-  cookies2.split("; ").forEach((cookie) => {
+  cookies2.split(/;\s*/).forEach((cookie) => {
     const [name, value] = cookie.split("=")
-    if (name && value) cookieMap.set(name, value)
+    if (name && value) cookieMap.set(name.trim(), value.trim())
   })
 
-  // Birleştirilmiş çerez string'ini oluştur
+  // Birleştirilmiş çerez string'ini oluştur - no spaces after semicolons
   return Array.from(cookieMap.entries())
     .map(([name, value]) => `${name}=${value}`)
-    .join("; ")
+    .join(";")
 }

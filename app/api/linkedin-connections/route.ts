@@ -17,21 +17,39 @@ export async function POST(req: NextRequest) {
 
     // Çerez formatını kontrol et ve düzelt
     let formattedCookies = cookies
-    // Eğer çerezler zaten bir string değilse veya "name=value;" formatında değilse düzelt
+
+    // ScrapingBee expects format: "name1=value1;name2=value2" (no spaces after semicolons)
     if (typeof cookies === "object") {
       // Obje ise string'e çevir
       formattedCookies = Object.entries(cookies)
         .map(([name, value]) => `${name}=${value}`)
-        .join("; ")
-    } else if (!cookies.includes("=")) {
-      return NextResponse.json({ error: "Invalid cookie format" }, { status: 400 })
+        .join(";") // No space after semicolon
+    } else if (typeof cookies === "string") {
+      // String ise formatı düzelt - boşlukları kaldır
+      formattedCookies = cookies
+        .split(/;\s*/) // Split by semicolon with optional spaces
+        .filter((cookie) => cookie.includes("=")) // Only keep valid cookies
+        .map((cookie) => cookie.trim()) // Trim each cookie
+        .join(";") // Join without spaces
+    }
+
+    // Validate cookie format
+    if (!formattedCookies || !formattedCookies.includes("=")) {
+      return NextResponse.json(
+        {
+          error: "Invalid cookie format",
+          expected: "name1=value1;name2=value2",
+          received: cookies,
+        },
+        { status: 400 },
+      )
     }
 
     // Varsayılan olarak kendi bağlantılarınızı çekin, aksi takdirde belirtilen profil URL'sini kullanın
     const url = profileUrl || "https://www.linkedin.com/mynetwork/invite-connect/connections/"
 
     console.log(`Fetching LinkedIn connections from: ${url}`)
-    console.log(`Using cookies format: ${formattedCookies.substring(0, 20)}...`)
+    console.log(`Using cookies format: ${formattedCookies.substring(0, 50)}...`)
 
     // ScrapingBee ile isteği yap
     const apiUrl = `https://app.scrapingbee.com/api/v1/`
