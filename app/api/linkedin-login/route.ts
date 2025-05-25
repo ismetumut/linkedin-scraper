@@ -1,9 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server"
+import { validateAndFormatCookies, extractLinkedInCookies } from "@/lib/cookie-validator"
 
 // ENV değişkeninden anahtarı alın
 const SCRAPINGBEE_API_KEY = process.env.SCRAPINGBEE_API_KEY || ""
 
-// Debug mode flag
+// Debug mode for detailed error reporting
 const DEBUG_MODE = true
 
 export async function POST(req: NextRequest) {
@@ -12,6 +13,7 @@ export async function POST(req: NextRequest) {
     timestamp: new Date().toISOString(),
     steps: [],
     errors: [],
+    requestId: Math.random().toString(36).substring(2, 15),
   }
 
   try {
@@ -21,6 +23,7 @@ export async function POST(req: NextRequest) {
       step: "parse_request",
       email: email ? email.substring(0, 3) + "***" : "missing",
       hasPassword: !!password,
+      timestamp: Date.now() - startTime,
     })
 
     if (!SCRAPINGBEE_API_KEY) {
@@ -45,7 +48,7 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    console.log("Starting LinkedIn login process for:", email)
+    console.log(`[${debugInfo.requestId}] Starting LinkedIn login process for: ${email}`)
 
     // Step 1: Fetch login page and extract CSRF token
     debugInfo.steps.push({ step: "fetch_login_page", timestamp: Date.now() - startTime })
@@ -62,18 +65,25 @@ export async function POST(req: NextRequest) {
       wait: "1000", // Wait 1 second for page to load
     }).toString()
 
-    console.log("Fetching LinkedIn login page...")
-    const loginPageRes = await fetch(`https://app.scrapingbee.com/api/v1/?${loginPageParams}`)
+    console.log(`[${debugInfo.requestId}] Fetching LinkedIn login page...`)
+    const loginPageRes = await fetch(`https://app.scrapingbee.com/api/v1/?${loginPageParams}`, {
+      headers: {
+        Accept: "text/html,application/xhtml+xml,application/xml",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
+    })
 
     debugInfo.steps.push({
       step: "login_page_response",
       status: loginPageRes.status,
       headers: Object.fromEntries(loginPageRes.headers.entries()),
+      timestamp: Date.now() - startTime,
     })
 
     if (!loginPageRes.ok) {
       const errorText = await loginPageRes.text()
-      console.error("Failed to fetch login page:", errorText)
+      console.error(`[${debugInfo.requestId}] Failed to fetch login page:`, errorText.substring(0, 200))
       debugInfo.errors.push({
         step: "login_page_fetch",
         status: loginPageRes.status,
@@ -91,12 +101,13 @@ export async function POST(req: NextRequest) {
     }
 
     const loginPageHtml = await loginPageRes.text()
-    console.log("Login page HTML length:", loginPageHtml.length)
+    console.log(`[${debugInfo.requestId}] Login page HTML length: ${loginPageHtml.length}`)
 
     debugInfo.steps.push({
       step: "parse_login_page",
       htmlLength: loginPageHtml.length,
       hasLoginForm: loginPageHtml.includes('name="session_key"'),
+      timestamp: Date.now() - startTime,
     })
 
     // Multiple methods to extract CSRF token
@@ -104,7 +115,7 @@ export async function POST(req: NextRequest) {
 
     // Method 1: Standard input field
     const csrfTokenMatch = loginPageHtml.match(/name="csrfToken"\s+value="([^"]+)"/)
-    if (csrfTokenMatch) {
+    if (csrfTokenMatch && csrfTokenMatch[1]) {
       csrfToken = csrfTokenMatch[1]
       debugInfo.steps.push({ step: "csrf_extracted", method: "input_field" })
     }
@@ -112,7 +123,7 @@ export async function POST(req: NextRequest) {
     // Method 2: Hidden input field with different formatting
     if (!csrfToken) {
       const csrfTokenMatch2 = loginPageHtml.match(/name=["']csrfToken["']\s+value=["']([^"']+)["']/)
-      if (csrfTokenMatch2) {
+      if (csrfTokenMatch2 && csrfTokenMatch2[1]) {
         csrfToken = csrfTokenMatch2[1]
         debugInfo.steps.push({ step: "csrf_extracted", method: "hidden_input" })
       }
@@ -121,17 +132,17 @@ export async function POST(req: NextRequest) {
     // Method 3: JavaScript variable
     if (!csrfToken) {
       const csrfTokenMatch3 = loginPageHtml.match(/csrfToken["']\s*:\s*["']([^"']+)["']/)
-      if (csrfTokenMatch3) {
+      if (csrfTokenMatch3 && csrfTokenMatch3[1]) {
         csrfToken = csrfTokenMatch3[1]
         debugInfo.steps.push({ step: "csrf_extracted", method: "js_variable" })
       }
     }
 
     if (!csrfToken) {
-      console.error("Could not extract CSRF token from HTML")
+      console.error(`[${debugInfo.requestId}] Could not extract CSRF token from HTML`)
       // Log a sample of the HTML to debug
       const htmlSample = loginPageHtml.substring(0, 1000)
-      console.log("HTML sample:", htmlSample)
+      console.log(`[${debugInfo.requestId}] HTML sample:`, htmlSample)
       debugInfo.errors.push({
         step: "csrf_extraction",
         htmlSample: htmlSample,
@@ -147,21 +158,27 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    console.log("CSRF token extracted:", csrfToken.substring(0, 10) + "...")
+    console.log(`[${debugInfo.requestId}] CSRF token extracted: ${csrfToken.substring(0, 10)}...`)
 
     // Parse initial cookies from login page
     const setCookieHeader = loginPageRes.headers.get("set-cookie")
     let initialCookies = ""
     if (setCookieHeader) {
-      initialCookies = parseCookieHeader(setCookieHeader)
-      console.log("Initial cookies obtained:", initialCookies.substring(0, 50) + "...")
+      // Use our enhanced cookie validator
+      const cookieValidation = validateAndFormatCookies(setCookieHeader)
+      initialCookies = cookieValidation.formatted
+
+      console.log(`[${debugInfo.requestId}] Initial cookies obtained: ${initialCookies.substring(0, 50)}...`)
       debugInfo.steps.push({
         step: "initial_cookies",
         cookieCount: initialCookies.split(";").length,
         hasBcookie: initialCookies.includes("bcookie"),
+        isValid: cookieValidation.isValid,
+        errors: cookieValidation.errors,
+        timestamp: Date.now() - startTime,
       })
     } else {
-      console.log("No initial cookies found in response")
+      console.log(`[${debugInfo.requestId}] No initial cookies found in response`)
       debugInfo.steps.push({ step: "initial_cookies", cookieCount: 0 })
     }
 
@@ -176,16 +193,18 @@ export async function POST(req: NextRequest) {
       loginCsrfParam: csrfToken,
       _d: "d", // Additional parameter sometimes required
       controlId: `d_checkpoint_lg_consumerLogin-login_submit_button`,
-      pageInstance: `urn:li:page:d_checkpoint_lg_consumerLogin;${generatePageInstance()}`,
+      pageInstance: `urn:li:page:d_checkpoint_lg_consumerLogin;${Math.random().toString(36).substring(2, 15)}`,
     }).toString()
 
-    console.log("Submitting login form to LinkedIn...")
+    console.log(`[${debugInfo.requestId}] Submitting login form to LinkedIn...`)
     debugInfo.steps.push({
       step: "login_form_data",
       formDataLength: formData.length,
       hasAllParams: formData.includes("session_key") && formData.includes("csrfToken"),
+      timestamp: Date.now() - startTime,
     })
 
+    // Critical: ScrapingBee requires specific parameters for LinkedIn login
     const loginParams = new URLSearchParams({
       api_key: SCRAPINGBEE_API_KEY,
       url: loginUrl,
@@ -204,6 +223,12 @@ export async function POST(req: NextRequest) {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml",
+        "Accept-Language": "en-US,en;q=0.9",
+        Referer: "https://www.linkedin.com/login",
+        Origin: "https://www.linkedin.com",
       },
       body: formData,
     })
@@ -212,11 +237,12 @@ export async function POST(req: NextRequest) {
       step: "login_response",
       status: loginRes.status,
       headers: Object.fromEntries(loginRes.headers.entries()),
+      timestamp: Date.now() - startTime,
     })
 
     if (!loginRes.ok) {
       const errorText = await loginRes.text()
-      console.error("Login request failed:", errorText)
+      console.error(`[${debugInfo.requestId}] Login request failed:`, errorText.substring(0, 200))
       debugInfo.errors.push({
         step: "login_submit",
         status: loginRes.status,
@@ -240,27 +266,64 @@ export async function POST(req: NextRequest) {
       responseLength: loginResponseText.length,
       isRedirect: loginResponseText.includes("window.location"),
       hasChallenge: loginResponseText.includes("challenge") || loginResponseText.includes("captcha"),
+      timestamp: Date.now() - startTime,
     })
 
     // Extract cookies from login response
     const loginCookieHeader = loginRes.headers.get("set-cookie")
     let cookies = initialCookies
+
     if (loginCookieHeader) {
-      const newCookies = parseCookieHeader(loginCookieHeader)
-      cookies = mergeCookieStrings(cookies, newCookies)
-      console.log("Login cookies obtained, total length:", cookies.length)
+      // Use our enhanced cookie validator for the login cookies
+      const loginCookieValidation = validateAndFormatCookies(loginCookieHeader)
+      const newCookies = loginCookieValidation.formatted
+
+      // Merge cookies properly
+      if (cookies && newCookies) {
+        // Extract all cookies into a map to handle duplicates
+        const cookieMap = new Map<string, string>()
+
+        // Add initial cookies
+        cookies.split(";").forEach((cookie) => {
+          const [name, ...valueParts] = cookie.split("=")
+          if (name) cookieMap.set(name, valueParts.join("="))
+        })
+
+        // Add new cookies (overwriting duplicates)
+        newCookies.split(";").forEach((cookie) => {
+          const [name, ...valueParts] = cookie.split("=")
+          if (name) cookieMap.set(name, valueParts.join("="))
+        })
+
+        // Convert back to string
+        cookies = Array.from(cookieMap.entries())
+          .map(([name, value]) => `${name}=${value}`)
+          .join(";")
+      } else {
+        cookies = newCookies || cookies
+      }
+
+      console.log(`[${debugInfo.requestId}] Login cookies obtained, total length: ${cookies.length}`)
+
+      // Check for critical authentication cookies
+      const hasLiAt = cookies.includes("li_at=")
+      const hasJSESSIONID = cookies.includes("JSESSIONID=")
+
       debugInfo.steps.push({
         step: "login_cookies",
         cookieCount: cookies.split(";").length,
-        hasLiAt: cookies.includes("li_at"),
-        hasJSESSIONID: cookies.includes("JSESSIONID"),
+        hasLiAt,
+        hasJSESSIONID,
+        isValid: loginCookieValidation.isValid,
+        errors: loginCookieValidation.errors,
+        timestamp: Date.now() - startTime,
       })
     }
 
     // Check for authentication cookies
     const hasAuthCookies = cookies.includes("li_at=") || cookies.includes("JSESSIONID=")
     if (!hasAuthCookies) {
-      console.error("No authentication cookies received")
+      console.error(`[${debugInfo.requestId}] No authentication cookies received`)
 
       // Check for specific error conditions
       if (loginResponseText.includes("captcha") || loginResponseText.includes("CAPTCHA")) {
@@ -306,7 +369,7 @@ export async function POST(req: NextRequest) {
     // Step 3: Verify login success
     debugInfo.steps.push({ step: "verify_login", timestamp: Date.now() - startTime })
 
-    console.log("Verifying login success...")
+    console.log(`[${debugInfo.requestId}] Verifying login success...`)
     const checkUrl = "https://www.linkedin.com/feed/"
     const checkParams = new URLSearchParams({
       api_key: SCRAPINGBEE_API_KEY,
@@ -319,16 +382,24 @@ export async function POST(req: NextRequest) {
       wait: "1000",
     }).toString()
 
-    const checkRes = await fetch(`https://app.scrapingbee.com/api/v1/?${checkParams}`)
+    const checkRes = await fetch(`https://app.scrapingbee.com/api/v1/?${checkParams}`, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+    })
 
     debugInfo.steps.push({
       step: "verify_response",
       status: checkRes.status,
+      timestamp: Date.now() - startTime,
     })
 
     if (!checkRes.ok) {
       const errorText = await checkRes.text()
-      console.error("Failed to verify login:", errorText)
+      console.error(`[${debugInfo.requestId}] Failed to verify login:`, errorText.substring(0, 200))
       debugInfo.errors.push({
         step: "verify_login",
         status: checkRes.status,
@@ -346,11 +417,11 @@ export async function POST(req: NextRequest) {
     }
 
     const checkHtml = await checkRes.text()
-    console.log("Verification page HTML length:", checkHtml.length)
+    console.log(`[${debugInfo.requestId}] Verification page HTML length: ${checkHtml.length}`)
 
     // Check if we're still on login page
     if (checkHtml.includes("login") && checkHtml.includes("session_password")) {
-      console.error("Login verification failed - redirected to login page")
+      console.error(`[${debugInfo.requestId}] Login verification failed - redirected to login page`)
       debugInfo.errors.push({
         step: "verify_content",
         stillOnLoginPage: true,
@@ -373,10 +444,16 @@ export async function POST(req: NextRequest) {
       cookieCount: cookies.split(";").length,
     })
 
-    console.log("Login successful for:", email)
+    // Extract only the important LinkedIn cookies
+    const importantCookies = extractLinkedInCookies(cookies)
+    const formattedImportantCookies = Object.entries(importantCookies)
+      .map(([name, value]) => `${name}=${value}`)
+      .join(";")
+
+    console.log(`[${debugInfo.requestId}] Login successful for: ${email}`)
     return NextResponse.json({
       success: true,
-      cookies,
+      cookies: formattedImportantCookies,
       message: "Successfully logged in to LinkedIn",
       debug: DEBUG_MODE ? debugInfo : undefined,
     })
@@ -396,81 +473,4 @@ export async function POST(req: NextRequest) {
       { status: 500 },
     )
   }
-}
-
-// Generate a random page instance ID
-function generatePageInstance(): string {
-  return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
-}
-
-// Enhanced cookie parsing with better error handling
-function parseCookieHeader(setCookieHeader: string): string {
-  if (!setCookieHeader) return ""
-
-  const cookiePairs: string[] = []
-  const processedCookies = new Set<string>()
-
-  try {
-    // Split by comma but not commas within cookie values
-    const cookieStrings = setCookieHeader.split(/,(?=\s*[^=]+=)/)
-
-    for (const cookieString of cookieStrings) {
-      // Extract the cookie name=value pair (before first semicolon)
-      const mainCookie = cookieString.split(";")[0].trim()
-      const equalIndex = mainCookie.indexOf("=")
-
-      if (equalIndex > 0) {
-        const name = mainCookie.substring(0, equalIndex).trim()
-        const value = mainCookie.substring(equalIndex + 1).trim()
-
-        // Skip duplicate cookies
-        if (!processedCookies.has(name) && name && value) {
-          cookiePairs.push(`${name}=${value}`)
-          processedCookies.add(name)
-        }
-      }
-    }
-  } catch (error) {
-    console.error("Error parsing cookie header:", error)
-  }
-
-  // ScrapingBee format: no spaces after semicolons
-  return cookiePairs.join(";")
-}
-
-// Enhanced cookie merging with deduplication
-function mergeCookieStrings(cookies1: string, cookies2: string): string {
-  if (!cookies1) return cookies2
-  if (!cookies2) return cookies1
-
-  const cookieMap = new Map<string, string>()
-
-  try {
-    // Parse first cookie string
-    for (const cookie of cookies1.split(/;\s*/)) {
-      const parts = cookie.split("=")
-      if (parts.length >= 2) {
-        const name = parts[0].trim()
-        const value = parts.slice(1).join("=").trim()
-        if (name) cookieMap.set(name, value)
-      }
-    }
-
-    // Parse second cookie string (overwrites duplicates)
-    for (const cookie of cookies2.split(/;\s*/)) {
-      const parts = cookie.split("=")
-      if (parts.length >= 2) {
-        const name = parts[0].trim()
-        const value = parts.slice(1).join("=").trim()
-        if (name) cookieMap.set(name, value)
-      }
-    }
-  } catch (error) {
-    console.error("Error merging cookie strings:", error)
-  }
-
-  // Build merged cookie string
-  return Array.from(cookieMap.entries())
-    .map(([name, value]) => `${name}=${value}`)
-    .join(";")
 }
