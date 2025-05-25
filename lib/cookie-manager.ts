@@ -1,75 +1,85 @@
 interface CookieData {
-  cookies: Record<string, string>
+  cookies: Record<string, string> | string // Tek string ya da key-value olarak desteklenir
   timestamp: number
-  email: string
+  sessionId: string
+  email?: string
   isValid: boolean
+  domain?: string
+  path?: string
 }
 
 class CookieManager {
   private cookieStore: Map<string, CookieData> = new Map()
-  private readonly COOKIE_EXPIRY = 24 * 60 * 60 * 1000 // 24 hours
+  private readonly COOKIE_EXPIRY = 24 * 60 * 60 * 1000 // 24 saat
 
-  saveCookies(email: string, cookies: Record<string, string>): void {
+  constructor() {
+    // Her 2 saatte bir expired cookie'leri temizle
+    setInterval(() => this.cleanupExpiredCookies(), 2 * 60 * 60 * 1000)
+  }
+
+  saveCookies(sessionId: string, cookies: Record<string, string> | string, email?: string, domain?: string, path?: string): void {
     const cookieData: CookieData = {
       cookies,
       timestamp: Date.now(),
+      sessionId,
       email,
       isValid: true,
+      domain,
+      path,
     }
-    this.cookieStore.set(email, cookieData)
+    this.cookieStore.set(sessionId, cookieData)
   }
 
-  getCookies(email: string): Record<string, string> | null {
-    const cookieData = this.cookieStore.get(email)
+  getCookies(sessionId: string): Record<string, string> | string | null {
+    const cookieData = this.cookieStore.get(sessionId)
     if (!cookieData) return null
-
-    // Check if cookies are expired
     if (Date.now() - cookieData.timestamp > this.COOKIE_EXPIRY) {
-      this.cookieStore.delete(email)
+      this.cookieStore.delete(sessionId)
       return null
     }
-
     return cookieData.isValid ? cookieData.cookies : null
   }
 
-  invalidateCookies(email: string): void {
-    const cookieData = this.cookieStore.get(email)
+  invalidateCookies(sessionId: string): void {
+    const cookieData = this.cookieStore.get(sessionId)
     if (cookieData) {
       cookieData.isValid = false
     }
   }
 
-  refreshCookies(email: string, newCookies: Record<string, string>): void {
-    this.saveCookies(email, newCookies)
+  refreshCookies(sessionId: string, newCookies: Record<string, string> | string): void {
+    this.saveCookies(sessionId, newCookies)
   }
 
   cleanupExpiredCookies(): void {
     const now = Date.now()
-    for (const [email, cookieData] of this.cookieStore.entries()) {
+    for (const [sessionId, cookieData] of this.cookieStore.entries()) {
       if (now - cookieData.timestamp > this.COOKIE_EXPIRY) {
-        this.cookieStore.delete(email)
+        this.cookieStore.delete(sessionId)
       }
     }
   }
 
-  getCookieStats(): { total: number; valid: number; expired: number } {
+  getCookieStats() {
     const now = Date.now()
-    let valid = 0
-    let expired = 0
-
+    let valid = 0, expired = 0
     for (const cookieData of this.cookieStore.values()) {
-      if (now - cookieData.timestamp > this.COOKIE_EXPIRY) {
-        expired++
-      } else if (cookieData.isValid) {
-        valid++
-      }
+      if (now - cookieData.timestamp > this.COOKIE_EXPIRY) expired++
+      else if (cookieData.isValid) valid++
     }
-
     return {
       total: this.cookieStore.size,
       valid,
       expired,
     }
+  }
+
+  clearAll() {
+    this.cookieStore.clear()
+  }
+
+  getAllCookies(): CookieData[] {
+    return Array.from(this.cookieStore.values())
   }
 }
 

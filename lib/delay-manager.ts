@@ -1,48 +1,77 @@
+type DelayType = "human" | "typing" | "mouse" | "custom" | "read"
+
+interface DelayConfig {
+  min: number
+  max: number
+}
+
 class DelayManager {
-  private readonly MIN_DELAY = 2000 // 2 seconds
-  private readonly MAX_DELAY = 10000 // 10 seconds
-  private readonly TYPING_DELAY_MIN = 50
-  private readonly TYPING_DELAY_MAX = 150
-  private readonly MOUSE_DELAY_MIN = 100
-  private readonly MOUSE_DELAY_MAX = 300
+  private readonly config: Record<DelayType, DelayConfig> = {
+    human: { min: 2000, max: 10000 },
+    typing: { min: 50, max: 150 },
+    mouse: { min: 100, max: 300 },
+    custom: { min: 100, max: 1000 },
+    read: { min: 1000, max: 5000 },
+  }
 
-  // Human-like delay between major actions
-  async randomDelay(): Promise<void> {
-    const delay = this.getRandomDelay(this.MIN_DELAY, this.MAX_DELAY)
-    console.log(`⏱️ Waiting ${delay}ms to mimic human behavior...`)
+  async wait(type: DelayType = "human", baseDelay?: number, jitterPercent: number = 20): Promise<void> {
+    let min = this.config[type].min
+    let max = this.config[type].max
+
+    if (type === "custom" && baseDelay) {
+      const jitter = baseDelay * (jitterPercent / 100)
+      min = baseDelay - jitter
+      max = baseDelay + jitter
+    }
+
+    const delay = this.getNormalRandomDelay(min, max)
+    // console.log(`[DELAY] Waiting ${delay}ms (${type})`)
     await this.sleep(delay)
   }
 
-  // Shorter delay for typing simulation
-  async typingDelay(): Promise<void> {
-    const delay = this.getRandomDelay(this.TYPING_DELAY_MIN, this.TYPING_DELAY_MAX)
+  // Human-like typing delay
+  async typing(): Promise<void> {
+    return this.wait("typing")
+  }
+
+  // Mouse event delay
+  async mouse(): Promise<void> {
+    return this.wait("mouse")
+  }
+
+  // Custom delay with optional jitter
+  async custom(baseDelay: number, jitterPercent = 20): Promise<void> {
+    return this.wait("custom", baseDelay, jitterPercent)
+  }
+
+  // Reading delay (based on text length)
+  async reading(contentLength: number): Promise<void> {
+    const words = Math.max(1, contentLength / 5)
+    const ms = (words / 250) * 60 * 1000
+    const min = this.config.read.min
+    const max = Math.max(this.config.read.max, ms * 2)
+    const delay = this.getNormalRandomDelay(min, max)
     await this.sleep(delay)
   }
 
-  // Custom delay with jitter
-  async customDelay(baseDelay: number, jitterPercent = 20): Promise<void> {
-    const jitter = baseDelay * (jitterPercent / 100)
-    const delay = this.getRandomDelay(baseDelay - jitter, baseDelay + jitter)
-    await this.sleep(delay)
-  }
-
-  // Exponential backoff for retries
-  async exponentialBackoff(attempt: number, baseDelay = 1000): Promise<void> {
+  // Exponential backoff delay for retries
+  async backoff(attempt: number, baseDelay = 1000): Promise<void> {
     const delay = baseDelay * Math.pow(2, attempt) + Math.random() * 1000
-    console.log(`🔄 Exponential backoff: waiting ${Math.round(delay)}ms (attempt ${attempt + 1})`)
-    await this.sleep(delay)
+    // console.log(`[BACKOFF] Waiting ${Math.round(delay)}ms (attempt ${attempt + 1})`)
+    await this.sleep(Math.round(delay))
   }
 
-  private getRandomDelay(min: number, max: number): number {
-    // Use normal distribution for more human-like timing
-    const u1 = Math.random()
-    const u2 = Math.random()
-    const z0 = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2)
+  // --- Utilities ---
 
-    // Convert to range and ensure it's within bounds
-    const normalized = (z0 + 3) / 6 // Normalize to 0-1 range
-    const delay = min + (max - min) * Math.max(0, Math.min(1, normalized))
-
+  private getNormalRandomDelay(min: number, max: number): number {
+    // Normal distribution with central tendency
+    let u = 0, v = 0
+    while (u === 0) u = Math.random()
+    while (v === 0) v = Math.random()
+    let z = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v)
+    z = (z + 3) / 6 // Normalize to 0-1
+    const bounded = Math.max(0, Math.min(1, z))
+    const delay = min + (max - min) * bounded
     return Math.round(delay)
   }
 
@@ -50,19 +79,16 @@ class DelayManager {
     return new Promise((resolve) => setTimeout(resolve, ms))
   }
 
-  // Simulate human reading time based on content length
-  getReadingDelay(contentLength: number): number {
-    // Average reading speed: 200-300 words per minute
-    const wordsPerMinute = 250
-    const averageWordLength = 5
-    const estimatedWords = contentLength / averageWordLength
-    const readingTimeMs = (estimatedWords / wordsPerMinute) * 60 * 1000
-
-    // Add some randomness and minimum delay
-    const minDelay = 1000
-    const maxDelay = Math.max(minDelay, readingTimeMs * 2)
-
-    return this.getRandomDelay(minDelay, maxDelay)
+  // İstersen delay süresini elde etmek için (async beklemeden)
+  getDelay(type: DelayType = "human", baseDelay?: number, jitterPercent: number = 20): number {
+    let min = this.config[type].min
+    let max = this.config[type].max
+    if (type === "custom" && baseDelay) {
+      const jitter = baseDelay * (jitterPercent / 100)
+      min = baseDelay - jitter
+      max = baseDelay + jitter
+    }
+    return this.getNormalRandomDelay(min, max)
   }
 }
 

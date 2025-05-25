@@ -16,6 +16,7 @@ interface ProxyStats {
   lastUsed: number
   averageResponseTime: number
   isBlacklisted: boolean
+  blacklistedAt?: number
 }
 
 class ProxyManager {
@@ -26,69 +27,66 @@ class ProxyManager {
   private readonly MAX_FAILURES = 3
   private readonly BLACKLIST_DURATION = 30 * 60 * 1000 // 30 minutes
 
-  // Add residential proxies (you would get these from a proxy service)
   addResidentialProxies(proxies: ProxyConfig[]): void {
     this.proxies.push(...proxies.filter((p) => p.isResidential))
     console.log(`📡 Added ${proxies.length} residential proxies`)
   }
 
-  // Add datacenter proxies as fallback
   addDatacenterProxies(proxies: ProxyConfig[]): void {
     this.proxies.push(...proxies.filter((p) => !p.isResidential))
     console.log(`🏢 Added ${proxies.length} datacenter proxies`)
   }
 
-  // Get next available proxy with rotation
-  getNextProxy(): ProxyConfig | null {
+  getNextProxy(preferredCountry?: string): ProxyConfig | null {
     if (this.proxies.length === 0) {
       console.warn("⚠️ No proxies available")
       return null
     }
 
-    const availableProxies = this.getAvailableProxies()
+    // Blacklist süresi dolmuş proxy'leri whitelist'e geri al
+    this.cleanupBlacklist()
+
+    let availableProxies = this.getAvailableProxies()
+    // Country veya city bazlı öncelik
+    if (preferredCountry) {
+      const countryProxies = availableProxies.filter(p => p.country === preferredCountry)
+      if (countryProxies.length > 0) availableProxies = countryProxies
+    }
 
     if (availableProxies.length === 0) {
       console.warn("⚠️ All proxies are in cooldown or blacklisted")
       return this.getLeastRecentlyUsedProxy()
     }
 
-    // Prefer residential proxies
-    const residentialProxies = availableProxies.filter((p) => p.isResidential)
+    // Önce residential, sonra kalanlar
+    const residentialProxies = availableProxies.filter(p => p.isResidential)
     const proxyPool = residentialProxies.length > 0 ? residentialProxies : availableProxies
 
-    // Round-robin with randomization
+    // Round robin + random
     const randomOffset = Math.floor(Math.random() * proxyPool.length)
     const selectedProxy = proxyPool[(this.currentProxyIndex + randomOffset) % proxyPool.length]
-
     this.currentProxyIndex = (this.currentProxyIndex + 1) % proxyPool.length
 
     this.recordProxyUsage(selectedProxy, "used")
-    console.log(
-      `🔄 Selected proxy: ${selectedProxy.host}:${selectedProxy.port} (${selectedProxy.country || "Unknown"})`,
-    )
+    console.log(`🔄 Selected proxy: ${selectedProxy.host}:${selectedProxy.port} (${selectedProxy.country || "Unknown"})`)
 
     return selectedProxy
   }
 
   private getAvailableProxies(): ProxyConfig[] {
     const now = Date.now()
-
-    return this.proxies.filter((proxy) => {
+    return this.proxies.filter(proxy => {
       const proxyKey = `${proxy.host}:${proxy.port}`
       const stats = this.proxyStats.get(proxyKey)
-
       if (!stats) return true
-
-      // Check if blacklisted
-      if (stats.isBlacklisted && now - stats.lastUsed < this.BLACKLIST_DURATION) {
+      // Blacklist kontrolü
+      if (stats.isBlacklisted && stats.blacklistedAt && (now - stats.blacklistedAt < this.BLACKLIST_DURATION)) {
         return false
       }
-
-      // Check cooldown
+      // Cooldown
       if (now - stats.lastUsed < this.PROXY_COOLDOWN) {
         return false
       }
-
       return true
     })
   }
@@ -96,17 +94,14 @@ class ProxyManager {
   private getLeastRecentlyUsedProxy(): ProxyConfig {
     let oldestProxy = this.proxies[0]
     let oldestTime = Date.now()
-
     for (const proxy of this.proxies) {
       const proxyKey = `${proxy.host}:${proxy.port}`
       const stats = this.proxyStats.get(proxyKey)
-
       if (!stats || stats.lastUsed < oldestTime) {
         oldestTime = stats?.lastUsed || 0
         oldestProxy = proxy
       }
     }
-
     return oldestProxy
   }
 
@@ -119,29 +114,47 @@ class ProxyManager {
       lastUsed: 0,
       averageResponseTime: 0,
       isBlacklisted: false,
+      blacklistedAt: undefined,
     }
 
     stats.lastUsed = Date.now()
-
     switch (result) {
       case "success":
         stats.successCount++
         if (responseTime) {
-          stats.averageResponseTime = (stats.averageResponseTime + responseTime) / 2
+          stats.averageResponseTime = stats.averageResponseTime === 0 ? responseTime : (stats.averageResponseTime + responseTime) / 2
         }
         stats.isBlacklisted = false
+        stats.failureCount = 0
+        stats.blacklistedAt = undefined
         break
-
       case "failure":
         stats.failureCount++
         if (stats.failureCount >= this.MAX_FAILURES) {
           stats.isBlacklisted = true
+          stats.blacklistedAt = Date.now()
           console.warn(`🚫 Blacklisted proxy: ${proxyKey} (${stats.failureCount} failures)`)
         }
+        break
+      case "used":
+      default:
+        // nothing
         break
     }
 
     this.proxyStats.set(proxyKey, stats)
+  }
+
+  private cleanupBlacklist() {
+    const now = Date.now()
+    for (const stats of this.proxyStats.values()) {
+      if (stats.isBlacklisted && stats.blacklistedAt && (now - stats.blacklistedAt >= this.BLACKLIST_DURATION)) {
+        stats.isBlacklisted = false
+        stats.failureCount = 0
+        stats.blacklistedAt = undefined
+        console.log(`✅ Proxy removed from blacklist: ${stats.proxy}`)
+      }
+    }
   }
 
   getProxyForPlaywright(proxy: ProxyConfig) {
@@ -160,13 +173,12 @@ class ProxyManager {
     for (const stats of this.proxyStats.values()) {
       stats.isBlacklisted = false
       stats.failureCount = 0
+      stats.blacklistedAt = undefined
     }
     console.log("✅ Proxy blacklist reset")
   }
 
-  // Initialize with some example residential proxy endpoints
   initializeExampleProxies(): void {
-    // These are example configurations - replace with real proxy service endpoints
     const exampleProxies: ProxyConfig[] = [
       {
         host: "residential-proxy-1.example.com",
@@ -199,11 +211,9 @@ class ProxyManager {
         isResidential: true,
       },
     ]
-
-    // Only add if no proxies are configured
     if (this.proxies.length === 0) {
-      console.log("🔧 No proxies configured, running without proxy rotation")
       // this.addResidentialProxies(exampleProxies)
+      console.log("🔧 No proxies configured, running without proxy rotation")
     }
   }
 }

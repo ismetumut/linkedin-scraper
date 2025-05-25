@@ -1,31 +1,40 @@
+// lib/connection-pool.ts
+
 interface PooledConnection {
   id: string
   lastUsed: number
   inUse: boolean
   requestCount: number
   headers: Record<string, string>
+  cookies?: string // Her connection'a özel cookie set edebilirsin
 }
 
 class ConnectionPool {
   private connections: Map<string, PooledConnection> = new Map()
   private readonly MAX_CONNECTIONS = 10
-  private readonly CONNECTION_TIMEOUT = 5 * 60 * 1000 // 5 minutes
+  private readonly CONNECTION_TIMEOUT = 5 * 60 * 1000 // 5 dakika
   private readonly MAX_REQUESTS_PER_CONNECTION = 100
 
-  async getConnection(sessionId: string): Promise<PooledConnection> {
-    // Clean up expired connections
-    this.cleanupExpiredConnections()
+  constructor() {
+    // Periyodik temizlik için timer başlat (her 2 dakikada bir)
+    setInterval(() => this.cleanupExpiredConnections(), 2 * 60 * 1000)
+  }
 
+  async getConnection(sessionId: string, cookies?: string): Promise<PooledConnection> {
+    this.cleanupExpiredConnections()
     let connection = this.connections.get(sessionId)
 
     if (!connection || this.isConnectionExpired(connection)) {
-      connection = this.createConnection(sessionId)
+      connection = this.createConnection(sessionId, cookies)
       this.connections.set(sessionId, connection)
     }
 
     connection.inUse = true
     connection.lastUsed = Date.now()
     connection.requestCount++
+
+    // İstersen bağlantıya yeni cookie set edebilirsin
+    if (cookies) connection.cookies = cookies
 
     return connection
   }
@@ -35,15 +44,13 @@ class ConnectionPool {
     if (connection) {
       connection.inUse = false
       connection.lastUsed = Date.now()
-
-      // Remove connection if it has exceeded max requests
       if (connection.requestCount >= this.MAX_REQUESTS_PER_CONNECTION) {
         this.connections.delete(sessionId)
       }
     }
   }
 
-  private createConnection(sessionId: string): PooledConnection {
+  private createConnection(sessionId: string, cookies?: string): PooledConnection {
     return {
       id: sessionId,
       lastUsed: Date.now(),
@@ -59,7 +66,9 @@ class ConnectionPool {
         "Sec-Fetch-Dest": "empty",
         "Sec-Fetch-Mode": "cors",
         "Sec-Fetch-Site": "same-origin",
+        ...(cookies ? { Cookie: cookies } : {}),
       },
+      cookies: cookies || "",
     }
   }
 
@@ -70,7 +79,8 @@ class ConnectionPool {
   private cleanupExpiredConnections(): void {
     const now = Date.now()
     for (const [sessionId, connection] of this.connections.entries()) {
-      if (now - connection.lastUsed > this.CONNECTION_TIMEOUT && !connection.inUse) {
+      if ((now - connection.lastUsed > this.CONNECTION_TIMEOUT && !connection.inUse) ||
+          connection.requestCount >= this.MAX_REQUESTS_PER_CONNECTION) {
         this.connections.delete(sessionId)
       }
     }
@@ -85,7 +95,7 @@ class ConnectionPool {
     return userAgents[Math.floor(Math.random() * userAgents.length)]
   }
 
-  getPoolStats(): { total: number; inUse: number; available: number } {
+  getPoolStats() {
     let inUse = 0
     for (const connection of this.connections.values()) {
       if (connection.inUse) inUse++
@@ -95,7 +105,15 @@ class ConnectionPool {
       total: this.connections.size,
       inUse,
       available: this.connections.size - inUse,
+      sessionIds: Array.from(this.connections.keys()),
+      timeouts: Array.from(this.connections.values()).filter(
+        c => this.isConnectionExpired(c)
+      ).length,
     }
+  }
+
+  clearAll() {
+    this.connections.clear()
   }
 }
 

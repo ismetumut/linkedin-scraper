@@ -24,7 +24,7 @@ interface LinkedInConnection {
 }
 
 class HttpClient {
-  private defaultTimeout = 30000 // 30 seconds
+  private defaultTimeout = 30000
 
   async request(url: string, options: RequestOptions = {}) {
     const {
@@ -36,13 +36,9 @@ class HttpClient {
       followRedirects = true,
     } = options
 
-    // Apply random delay before request
     await delayManager.randomDelay()
-
-    // Get a random user agent
     const userAgent = userAgentManager.getRandomUserAgent()
 
-    // Prepare headers with anti-detection measures
     const requestHeaders: Record<string, string> = {
       "User-Agent": userAgent,
       Accept:
@@ -63,12 +59,10 @@ class HttpClient {
       ...headers,
     }
 
-    // Add cookies if provided
     if (cookies) {
       requestHeaders["Cookie"] = cookies
     }
 
-    // Create AbortController for timeout
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), timeout)
 
@@ -79,8 +73,6 @@ class HttpClient {
         redirect: followRedirects ? "follow" : "manual",
         signal: controller.signal,
       }
-
-      // Add body if provided
       if (body) {
         if (typeof body === "object") {
           requestHeaders["Content-Type"] = "application/json"
@@ -97,19 +89,12 @@ class HttpClient {
       })
 
       const response = await fetch(url, requestOptions)
-
-      // Extract and store cookies
       const setCookieHeader = response.headers.get("set-cookie")
       const responseCookies = setCookieHeader ? this.parseCookies(setCookieHeader) : null
-
-      // Get response data
       const contentType = response.headers.get("content-type") || ""
       let data
-
       if (contentType.includes("application/json")) {
         data = await response.json()
-      } else if (contentType.includes("text/html")) {
-        data = await response.text()
       } else {
         data = await response.text()
       }
@@ -121,7 +106,7 @@ class HttpClient {
         data,
         url: response.url,
       }
-    } catch (error) {
+    } catch (error: any) {
       if (error.name === "AbortError") {
         throw new Error(`Request to ${url} timed out after ${timeout}ms`)
       }
@@ -133,8 +118,8 @@ class HttpClient {
 
   private parseCookies(setCookieHeader: string): Record<string, string> {
     const cookies: Record<string, string> = {}
-
-    setCookieHeader.split(",").forEach((cookieString) => {
+    // LinkedIn birden fazla set-cookie ile yanıt verebilir, virgül ile ayırmak yerine split(";") daha güvenli
+    setCookieHeader.split(/,(?=[^ ]*?=)/).forEach((cookieString) => {
       const parts = cookieString.split(";")[0].trim().split("=")
       if (parts.length >= 2) {
         const name = parts[0]
@@ -142,7 +127,6 @@ class HttpClient {
         cookies[name] = value
       }
     })
-
     return cookies
   }
 
@@ -156,24 +140,15 @@ class HttpClient {
     logger.info("Attempting to login to LinkedIn", { email })
 
     try {
-      // Step 1: Get the login page to obtain CSRF token
+      // CSRF çek
       const loginPageResponse = await this.request("https://www.linkedin.com/login")
-
-      if (loginPageResponse.status !== 200) {
-        throw new Error(`Failed to load LinkedIn login page: ${loginPageResponse.status}`)
-      }
-
+      if (loginPageResponse.status !== 200) throw new Error(`Failed to load LinkedIn login page: ${loginPageResponse.status}`)
       const $ = cheerio.load(loginPageResponse.data as string)
       const csrfToken = $('input[name="csrfToken"]').val() as string
-
-      if (!csrfToken) {
-        throw new Error("Could not find CSRF token on LinkedIn login page")
-      }
-
-      // Get initial cookies
+      if (!csrfToken) throw new Error("Could not find CSRF token on LinkedIn login page")
       const initialCookies = loginPageResponse.cookies || {}
 
-      // Step 2: Submit login form
+      // Login POST
       const loginResponse = await this.request("https://www.linkedin.com/checkpoint/lg/login-submit", {
         method: "POST",
         headers: {
@@ -188,33 +163,25 @@ class HttpClient {
         }).toString(),
       })
 
-      // Check for successful login
+      // Başarılı login kontrolü
       if (loginResponse.status === 200 || loginResponse.status === 302) {
-        const allCookies = {
-          ...initialCookies,
-          ...(loginResponse.cookies || {}),
-        }
-
-        // Verify login success by checking for specific cookies
+        const allCookies = { ...initialCookies, ...(loginResponse.cookies || {}) }
         if (allCookies["li_at"] || allCookies["JSESSIONID"]) {
           logger.info("LinkedIn login successful", { email })
           return allCookies
         }
       }
-
-      // Check for CAPTCHA or verification
+      // Captcha ve challenge kontrolü
       if (loginResponse.data && typeof loginResponse.data === "string") {
         if (loginResponse.data.includes("captcha") || loginResponse.data.includes("CAPTCHA")) {
           throw new Error("LinkedIn login requires CAPTCHA verification")
         }
-
         if (loginResponse.data.includes("challenge") || loginResponse.data.includes("verification")) {
           throw new Error("LinkedIn requires additional verification")
         }
       }
-
       throw new Error("LinkedIn login failed - invalid credentials")
-    } catch (error) {
+    } catch (error: any) {
       logger.error("LinkedIn login error", { error: error.message, email })
       throw error
     }
@@ -222,109 +189,58 @@ class HttpClient {
 
   async getLinkedInConnections(cookies: Record<string, string>): Promise<LinkedInConnection[]> {
     logger.info("Fetching LinkedIn connections")
-
     try {
-      // Format cookies for request
       const cookieString = this.formatCookies(cookies)
-
-      // Request connections page
       const response = await this.request("https://www.linkedin.com/mynetwork/invite-connect/connections/", {
         cookies: cookieString,
       })
-
-      if (response.status !== 200) {
-        throw new Error(`Failed to load connections page: ${response.status}`)
-      }
-
+      if (response.status !== 200) throw new Error(`Failed to load connections page: ${response.status}`)
       const html = response.data as string
-
-      // Check if we're still logged in
-      if (html.includes("login") && html.includes("session_password")) {
-        throw new Error("LinkedIn session expired")
-      }
-
-      // Parse connections from HTML
-      const connections = this.parseConnectionsFromHtml(html)
-
-      logger.info(`Successfully extracted ${connections.length} LinkedIn connections`)
-      return connections
-    } catch (error) {
+      if (html.includes("login") && html.includes("session_password")) throw new Error("LinkedIn session expired")
+      return this.parseConnectionsFromHtml(html)
+    } catch (error: any) {
       logger.error("Error fetching LinkedIn connections", { error: error.message })
       throw error
     }
   }
 
-  async getSecondDegreeConnections(
-    cookies: Record<string, string>,
-    connectionId: string,
-  ): Promise<LinkedInConnection[]> {
+  async getSecondDegreeConnections(cookies: Record<string, string>, connectionId: string): Promise<LinkedInConnection[]> {
     logger.info("Fetching second-degree connections", { connectionId })
-
     try {
-      // Format cookies for request
       const cookieString = this.formatCookies(cookies)
-
-      // First get the profile page
       const profileUrl = connectionId.startsWith("http") ? connectionId : `https://www.linkedin.com/in/${connectionId}`
-
       const profileResponse = await this.request(profileUrl, { cookies: cookieString })
-
-      if (profileResponse.status !== 200) {
-        throw new Error(`Failed to load profile page: ${profileResponse.status}`)
-      }
-
-      // Parse HTML to find connections URL
+      if (profileResponse.status !== 200) throw new Error(`Failed to load profile page: ${profileResponse.status}`)
       const profileHtml = profileResponse.data as string
       const $ = cheerio.load(profileHtml)
-
-      // Look for connections link
       let connectionsUrl = ""
       $('a[href*="connections"]').each((_, element) => {
         const href = $(element).attr("href")
         if (href && href.includes("connections")) {
           connectionsUrl = href
-          return false // break each loop
+          return false // break
         }
       })
-
       if (!connectionsUrl) {
         logger.warn("No connections link found on profile page", { connectionId })
         return []
       }
-
-      // Make sure URL is absolute
-      if (!connectionsUrl.startsWith("http")) {
-        connectionsUrl = `https://www.linkedin.com${connectionsUrl}`
-      }
-
-      // Fetch connections page
+      if (!connectionsUrl.startsWith("http")) connectionsUrl = `https://www.linkedin.com${connectionsUrl}`
       const connectionsResponse = await this.request(connectionsUrl, { cookies: cookieString })
-
-      if (connectionsResponse.status !== 200) {
-        throw new Error(`Failed to load connections page: ${connectionsResponse.status}`)
-      }
-
-      const connectionsHtml = connectionsResponse.data as string
-
-      // Parse connections from HTML
-      const connections = this.parseConnectionsFromHtml(connectionsHtml)
-
-      logger.info(`Successfully extracted ${connections.length} second-degree connections`, { connectionId })
-      return connections
-    } catch (error) {
+      if (connectionsResponse.status !== 200) throw new Error(`Failed to load connections page: ${connectionsResponse.status}`)
+      return this.parseConnectionsFromHtml(connectionsResponse.data as string)
+    } catch (error: any) {
       logger.error("Error fetching second-degree connections", {
         error: error.message,
         connectionId,
       })
-      return [] // Return empty array instead of throwing for second-degree
+      return []
     }
   }
 
   private parseConnectionsFromHtml(html: string): LinkedInConnection[] {
     const connections: LinkedInConnection[] = []
     const $ = cheerio.load(html)
-
-    // Try multiple selector strategies for robustness
     const selectors = [
       ".mn-connection-card",
       ".connection-card",
@@ -332,33 +248,22 @@ class HttpClient {
       "[data-test-connection]",
       ".entity-result",
     ]
-
     selectors.forEach((selector) => {
       $(selector).each((_, element) => {
         try {
-          // Extract name
           const nameElement = $(element).find(
             ".mn-connection-card__name, .connection-card__name, .search-result__result-link, [data-test-connection-name], .entity-result__title-text a",
           )
           const name = nameElement.text().trim()
-
-          // Extract title
           const titleElement = $(element).find(
             ".mn-connection-card__occupation, .connection-card__occupation, .subline-level-1, [data-test-connection-occupation], .entity-result__primary-subtitle",
           )
           const title = titleElement.text().trim()
-
-          // Extract company
           const companyElement = $(element).find(".entity-result__secondary-subtitle")
           const company = companyElement.text().trim()
-
-          // Extract profile URL
           const linkElement = $(element).find('a[href*="/in/"]')
           const profileUrl = linkElement.attr("href") || ""
-
-          // Extract ID from URL
           const id = profileUrl.split("/in/")[1]?.split("/")[0] || ""
-
           if (name) {
             connections.push({
               name,
@@ -368,12 +273,11 @@ class HttpClient {
               id,
             })
           }
-        } catch (error) {
+        } catch (error: any) {
           logger.error("Error parsing connection element", { error: error.message })
         }
       })
     })
-
     return connections
   }
 }
