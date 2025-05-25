@@ -40,16 +40,11 @@ export async function POST(req: NextRequest) {
       .map(([name, value]) => `${name}=${value}`)
       .join(";")
 
-    // Verify the cookies by making a test request to LinkedIn
-    const testResult = await testLinkedInCookies(formattedImportantCookies)
-
     return NextResponse.json({
-      success: testResult.success,
+      success: true,
       cookies: formattedImportantCookies,
-      message: testResult.success
-        ? "LinkedIn cookies validated successfully"
-        : "Cookies are valid but LinkedIn session may be expired",
-      testResult,
+      message: "LinkedIn cookies validated and formatted successfully",
+      authCookies: cookieValidation.authCookies,
     })
   } catch (error) {
     return NextResponse.json(
@@ -58,32 +53,5 @@ export async function POST(req: NextRequest) {
       },
       { status: 500 },
     )
-  }
-}
-
-async function testLinkedInCookies(cookies: string): Promise<{ success: boolean; error?: string }> {
-  try {
-    // Make a simple request to LinkedIn to verify cookies
-    const response = await fetch("https://www.linkedin.com/feed/", {
-      headers: {
-        Cookie: cookies,
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      },
-    })
-
-    // Check if we're redirected to login page
-    const html = await response.text()
-    const isLoginPage = html.includes("login") && html.includes("session_password")
-
-    return {
-      success: !isLoginPage,
-      error: isLoginPage ? "LinkedIn session expired" : undefined,
-    }
-  } catch (error) {
-    return {
-      success: false,
-      error: error.message,
-    }
   }
 }

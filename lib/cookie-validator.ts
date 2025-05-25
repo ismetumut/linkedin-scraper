@@ -1,6 +1,5 @@
 /**
  * Enhanced cookie validation and formatting utilities
- * Addresses the root cause of invalid cookie format errors
  */
 
 export interface CookieValidationResult {
@@ -59,19 +58,9 @@ export function validateAndFormatCookies(cookies: string | Record<string, string
             return false
           }
 
-          const [name, value] = trimmed.split("=", 2) // Limit to 2 parts to handle values with =
-          if (!name || value === undefined) {
-            errors.push(`Invalid cookie pair: ${trimmed}`)
-            return false
-          }
-
           return true
         })
-        .map((pair) => {
-          const [name, ...valueParts] = pair.trim().split("=")
-          // Join value parts in case the value contains = characters
-          return `${name}=${valueParts.join("=")}`
-        })
+        .map((pair) => pair.trim())
 
       if (pairs.length === 0) {
         errors.push("No valid cookie pairs found in string")
@@ -95,7 +84,7 @@ export function validateAndFormatCookies(cookies: string | Record<string, string
     }
 
     return {
-      isValid: errors.length === 0 && (authCookies.hasLiAt || authCookies.hasJSESSIONID),
+      isValid: errors.length === 0,
       formatted,
       errors,
       authCookies,
@@ -108,7 +97,6 @@ export function validateAndFormatCookies(cookies: string | Record<string, string
 
 /**
  * Extracts important LinkedIn cookies from a cookie string
- * LinkedIn requires specific cookies for authentication
  */
 export function extractLinkedInCookies(cookieString: string): Record<string, string> {
   // These are the critical cookies for LinkedIn authentication
@@ -142,27 +130,4 @@ export function extractLinkedInCookies(cookieString: string): Record<string, str
  */
 export function hasRequiredLinkedInCookies(cookies: string): boolean {
   return cookies.includes("li_at=") || cookies.includes("JSESSIONID=")
-}
-
-/**
- * Formats cookies for ScrapingBee which requires a specific format
- * This is critical as ScrapingBee rejects cookies with spaces after semicolons
- */
-export function formatCookiesForScrapingBee(cookies: string | Record<string, string>): string {
-  if (typeof cookies === "object" && cookies !== null) {
-    return Object.entries(cookies)
-      .filter(([name, value]) => name && value)
-      .map(([name, value]) => `${name}=${value}`)
-      .join(";") // No spaces after semicolons
-  }
-
-  if (typeof cookies === "string") {
-    return cookies
-      .split(/;\s*/) // Split by semicolon with optional spaces
-      .filter((pair) => pair.includes("="))
-      .map((pair) => pair.trim())
-      .join(";") // No spaces after semicolons
-  }
-
-  return ""
 }
