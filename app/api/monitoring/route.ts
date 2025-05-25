@@ -13,7 +13,27 @@ export async function GET(request: NextRequest) {
       case "logs":
         return handleLogsRequest(searchParams)
       case "metrics":
-        return handleMetricsRequest()
+        // return handleMetricsRequest()
+        const logStats = logger.getLogStats()
+        const cacheStats = requestCache.getCacheStats()
+
+        const memoryUsage = process.memoryUsage()
+
+        const metrics = {
+          timestamp: new Date().toISOString(),
+          uptime: process.uptime(),
+          memory: {
+            rss: `${Math.round(memoryUsage.rss / 1024 / 1024)} MB`,
+            heapTotal: `${Math.round(memoryUsage.heapTotal / 1024 / 1024)} MB`,
+            heapUsed: `${Math.round(memoryUsage.heapUsed / 1024 / 1024)} MB`,
+            external: `${Math.round(memoryUsage.external / 1024 / 1024)} MB`,
+          },
+          logs: logStats,
+          cache: cacheStats,
+          environment: process.env.NODE_ENV || "development",
+        }
+
+        return NextResponse.json(metrics)
       case "cleanup":
         return handleCleanupRequest()
       default:
@@ -55,22 +75,22 @@ async function handleLogsRequest(searchParams: URLSearchParams) {
   })
 }
 
-async function handleMetricsRequest() {
-  const metrics = {
-    timestamp: new Date().toISOString(),
-    system: {
-      uptime: process.uptime(),
-      memory: process.memoryUsage(),
-      cpu: process.cpuUsage(),
-    },
-    cookieManager: cookieManager.getCookieStats(),
-    requestCache: requestCache.getCacheStats(),
-    userAgentManager: userAgentManager.getUsageStats(),
-    logger: logger.getLogStats(),
-  }
+// async function handleMetricsRequest() {
+//   const metrics = {
+//     timestamp: new Date().toISOString(),
+//     system: {
+//       uptime: process.uptime(),
+//       memory: process.memoryUsage(),
+//       cpu: process.cpuUsage(),
+//     },
+//     cookieManager: cookieManager.getCookieStats(),
+//     requestCache: requestCache.getCacheStats(),
+//     userAgentManager: userAgentManager.getUsageStats(),
+//     logger: logger.getLogStats(),
+//   }
 
-  return NextResponse.json(metrics)
-}
+//   return NextResponse.json(metrics)
+// }
 
 async function handleCleanupRequest() {
   logger.info("Manual cleanup triggered")
